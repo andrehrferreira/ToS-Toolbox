@@ -231,102 +231,48 @@ TSharedPtr<FJsonObject> FNavMeshExporter::GetNavMeshData(UWorld* World)
 		}
 	}
 
-	// Process each NavMeshBoundsVolume found
-	for (int32 i = 0; i < NavMeshBounds.Num(); i++)
+	// Get NavMesh data (simplified for server validation)
+	ANavigationData* NavData = NavSys->GetDefaultNavDataInstance();
+	if (NavData)
 	{
-		ANavMeshBoundsVolume* NavMeshVolume = NavMeshBounds[i];
 		TSharedPtr<FJsonObject> NavMeshObject = MakeShareable(new FJsonObject);
 		
-		// Basic volume information
-		NavMeshObject->SetStringField(TEXT("Name"), NavMeshVolume->GetName());
-		
-		// Volume position
-		FVector Location = NavMeshVolume->GetActorLocation();
-		TSharedPtr<FJsonObject> LocationObject = MakeShareable(new FJsonObject);
-		LocationObject->SetNumberField(TEXT("X"), Location.X);
-		LocationObject->SetNumberField(TEXT("Y"), Location.Y);
-		LocationObject->SetNumberField(TEXT("Z"), Location.Z);
-		NavMeshObject->SetObjectField(TEXT("Location"), LocationObject);
-		
-		// Volume scale
-		FVector Scale = NavMeshVolume->GetActorScale3D();
-		TSharedPtr<FJsonObject> ScaleObject = MakeShareable(new FJsonObject);
-		ScaleObject->SetNumberField(TEXT("X"), Scale.X);
-		ScaleObject->SetNumberField(TEXT("Y"), Scale.Y);
-		ScaleObject->SetNumberField(TEXT("Z"), Scale.Z);
-		NavMeshObject->SetObjectField(TEXT("Scale"), ScaleObject);
-
-		// Get volume bounds
-		FBox Bounds = NavMeshVolume->GetComponentsBoundingBox();
-		TSharedPtr<FJsonObject> BoundsObject = MakeShareable(new FJsonObject);
-		
-		TSharedPtr<FJsonObject> MinBounds = MakeShareable(new FJsonObject);
-		MinBounds->SetNumberField(TEXT("X"), Bounds.Min.X);
-		MinBounds->SetNumberField(TEXT("Y"), Bounds.Min.Y);
-		MinBounds->SetNumberField(TEXT("Z"), Bounds.Min.Z);
-		BoundsObject->SetObjectField(TEXT("Min"), MinBounds);
-		
-		TSharedPtr<FJsonObject> MaxBounds = MakeShareable(new FJsonObject);
-		MaxBounds->SetNumberField(TEXT("X"), Bounds.Max.X);
-		MaxBounds->SetNumberField(TEXT("Y"), Bounds.Max.Y);
-		MaxBounds->SetNumberField(TEXT("Z"), Bounds.Max.Z);
-		BoundsObject->SetObjectField(TEXT("Max"), MaxBounds);
-		
-		NavMeshObject->SetObjectField(TEXT("Bounds"), BoundsObject);
-
-		ANavigationData* NavData = NavSys->GetDefaultNavDataInstance();
-		if (NavData)
+		// Only essential bounds information
+		FBox NavDataBounds = NavData->GetBounds();
+		if (NavDataBounds.IsValid)
 		{
-			TSharedPtr<FJsonObject> NavMeshDataObject = MakeShareable(new FJsonObject);
-			
-			NavMeshDataObject->SetStringField(TEXT("NavMeshClass"), NavData->GetClass()->GetName());
-			NavMeshDataObject->SetBoolField(TEXT("IsNavDataValid"), IsValid(NavData));
-
-			FBox NavDataBounds = NavData->GetBounds();
-			if (NavDataBounds.IsValid)
+			TSharedPtr<FJsonObject> BoundsObject = MakeShareable(new FJsonObject);
+			BoundsObject->SetNumberField(TEXT("MinX"), FMath::RoundToInt(NavDataBounds.Min.X));
+			BoundsObject->SetNumberField(TEXT("MinY"), FMath::RoundToInt(NavDataBounds.Min.Y));
+			BoundsObject->SetNumberField(TEXT("MinZ"), FMath::RoundToInt(NavDataBounds.Min.Z));
+			BoundsObject->SetNumberField(TEXT("MaxX"), FMath::RoundToInt(NavDataBounds.Max.X));
+			BoundsObject->SetNumberField(TEXT("MaxY"), FMath::RoundToInt(NavDataBounds.Max.Y));
+			BoundsObject->SetNumberField(TEXT("MaxZ"), FMath::RoundToInt(NavDataBounds.Max.Z));
+			NavMeshObject->SetObjectField(TEXT("Bounds"), BoundsObject);
+		}
+		
+		ARecastNavMesh* RecastNavMesh = Cast<ARecastNavMesh>(NavData);
+		if (RecastNavMesh)
+		{
+			// Add triangulation data
+			TSharedPtr<FJsonObject> TriangulationData = ExtractNavMeshTriangulation(RecastNavMesh);
+			if (TriangulationData.IsValid())
 			{
-				TSharedPtr<FJsonObject> NavBoundsObject = MakeShareable(new FJsonObject);
-				
-				TSharedPtr<FJsonObject> NavMinBounds = MakeShareable(new FJsonObject);
-				NavMinBounds->SetNumberField(TEXT("X"), NavDataBounds.Min.X);
-				NavMinBounds->SetNumberField(TEXT("Y"), NavDataBounds.Min.Y);
-				NavMinBounds->SetNumberField(TEXT("Z"), NavDataBounds.Min.Z);
-				NavBoundsObject->SetObjectField(TEXT("Min"), NavMinBounds);
-				
-				TSharedPtr<FJsonObject> NavMaxBounds = MakeShareable(new FJsonObject);
-				NavMaxBounds->SetNumberField(TEXT("X"), NavDataBounds.Max.X);
-				NavMaxBounds->SetNumberField(TEXT("Y"), NavDataBounds.Max.Y);
-				NavMaxBounds->SetNumberField(TEXT("Z"), NavDataBounds.Max.Z);
-				NavBoundsObject->SetObjectField(TEXT("Max"), NavMaxBounds);
-				
-				NavMeshDataObject->SetObjectField(TEXT("NavMeshBounds"), NavBoundsObject);
+				NavMeshObject->SetObjectField(TEXT("NavMesh"), TriangulationData);
 			}
 			
-			ARecastNavMesh* RecastNavMesh = Cast<ARecastNavMesh>(NavData);
-			if (RecastNavMesh)
+			// Add heightmap data
+			TSharedPtr<FJsonObject> HeightmapData = ExtractHeightmap(World, NavData->GetBounds());
+			if (HeightmapData.IsValid())
 			{
-				TSharedPtr<FJsonObject> TriangulationData = ExtractNavMeshTriangulation(RecastNavMesh);
-				if (TriangulationData.IsValid())
-				{
-					NavMeshDataObject->SetObjectField(TEXT("Triangulation"), TriangulationData);
-				}
-				
-				// Extract heightmap for ground/height validation
-				TSharedPtr<FJsonObject> HeightmapData = ExtractHeightmap(World, NavData->GetBounds());
-				if (HeightmapData.IsValid())
-				{
-					NavMeshDataObject->SetObjectField(TEXT("Heightmap"), HeightmapData);
-				}
+				NavMeshObject->SetObjectField(TEXT("Heightmap"), HeightmapData);
 			}
-			
-			NavMeshObject->SetObjectField(TEXT("NavMeshData"), NavMeshDataObject);
 		}
 
 		NavMeshArray.Add(MakeShareable(new FJsonValueObject(NavMeshObject)));
 	}
 
-	JsonObject->SetArrayField(TEXT("NavMeshVolumes"), NavMeshArray);
-	JsonObject->SetNumberField(TEXT("TotalNavMeshVolumes"), NavMeshBounds.Num());
+	JsonObject->SetArrayField(TEXT("NavMeshData"), NavMeshArray);
 
 	return JsonObject;
 }
@@ -456,40 +402,25 @@ TSharedPtr<FJsonObject> FNavMeshExporter::ExtractNavMeshTriangulation(ARecastNav
 		TotalVertices = NavVertices.Num();
 	}
 
+	// Simplified NavMesh data - only essentials for server validation
 	TriangulationObject->SetArrayField(TEXT("Vertices"), VerticesArray);
 	TriangulationObject->SetArrayField(TEXT("Triangles"), TrianglesArray);
-	TriangulationObject->SetNumberField(TEXT("TotalVertices"), TotalVertices);
-	TriangulationObject->SetNumberField(TEXT("TotalTriangles"), TotalTriangles);
+	TriangulationObject->SetNumberField(TEXT("VertexCount"), TotalVertices);
+	TriangulationObject->SetNumberField(TEXT("TriangleCount"), TotalTriangles);
 	
-	// Add comprehensive metadata for server validation
-	TSharedPtr<FJsonObject> TriangulationMetadata = MakeShareable(new FJsonObject);
-	TriangulationMetadata->SetStringField(TEXT("ExtractionMethod"), TEXT("High-resolution surface sampling with proximity-based triangulation"));
-	TriangulationMetadata->SetStringField(TEXT("Description"), TEXT("Real NavMesh surface data suitable for server-side pathfinding validation"));
-	TriangulationMetadata->SetNumberField(TEXT("SamplingResolution"), 100);
-	TriangulationMetadata->SetNumberField(TEXT("MaxTriangleDistance"), 300.0f);
-	TriangulationMetadata->SetNumberField(TEXT("MinTriangleArea"), 500.0f);
-	TriangulationMetadata->SetBoolField(TEXT("HasRealGeometry"), true);
-	TriangulationMetadata->SetBoolField(TEXT("IsServerReady"), true);
-	TriangulationMetadata->SetStringField(TEXT("ExportVersion"), TEXT("2.0"));
-	
-	// Add NavMesh properties for validation
+	// Add only essential bounds for validation
 	FBox NavBounds = RecastNavMesh->GetBounds();
 	if (NavBounds.IsValid)
 	{
-		TSharedPtr<FJsonObject> ValidationBounds = MakeShareable(new FJsonObject);
-		ValidationBounds->SetNumberField(TEXT("MinX"), NavBounds.Min.X);
-		ValidationBounds->SetNumberField(TEXT("MinY"), NavBounds.Min.Y);
-		ValidationBounds->SetNumberField(TEXT("MinZ"), NavBounds.Min.Z);
-		ValidationBounds->SetNumberField(TEXT("MaxX"), NavBounds.Max.X);
-		ValidationBounds->SetNumberField(TEXT("MaxY"), NavBounds.Max.Y);
-		ValidationBounds->SetNumberField(TEXT("MaxZ"), NavBounds.Max.Z);
-		ValidationBounds->SetNumberField(TEXT("SizeX"), NavBounds.GetSize().X);
-		ValidationBounds->SetNumberField(TEXT("SizeY"), NavBounds.GetSize().Y);
-		ValidationBounds->SetNumberField(TEXT("SizeZ"), NavBounds.GetSize().Z);
-		TriangulationMetadata->SetObjectField(TEXT("ValidationBounds"), ValidationBounds);
+		TSharedPtr<FJsonObject> Bounds = MakeShareable(new FJsonObject);
+		Bounds->SetNumberField(TEXT("MinX"), FMath::RoundToInt(NavBounds.Min.X));
+		Bounds->SetNumberField(TEXT("MinY"), FMath::RoundToInt(NavBounds.Min.Y));
+		Bounds->SetNumberField(TEXT("MinZ"), FMath::RoundToInt(NavBounds.Min.Z));
+		Bounds->SetNumberField(TEXT("MaxX"), FMath::RoundToInt(NavBounds.Max.X));
+		Bounds->SetNumberField(TEXT("MaxY"), FMath::RoundToInt(NavBounds.Max.Y));
+		Bounds->SetNumberField(TEXT("MaxZ"), FMath::RoundToInt(NavBounds.Max.Z));
+		TriangulationObject->SetObjectField(TEXT("Bounds"), Bounds);
 	}
-	
-	TriangulationObject->SetObjectField(TEXT("Metadata"), TriangulationMetadata);
 	
 	return TriangulationObject;
 }
@@ -632,22 +563,15 @@ TSharedPtr<FJsonObject> FNavMeshExporter::ExtractHeightmap(UWorld* World, const 
 	HeightmapObject->SetNumberField(TEXT("ValidHits"), ValidHits);
 	HeightmapObject->SetNumberField(TEXT("HitRate"), TotalSamples > 0 ? (float)ValidHits / TotalSamples : 0.0f);
 	
-	// Add heightmap configuration metadata
-	TSharedPtr<FJsonObject> HeightmapConfig = MakeShareable(new FJsonObject);
-	HeightmapConfig->SetNumberField(TEXT("Resolution"), Resolution);
-	HeightmapConfig->SetNumberField(TEXT("BufferSize"), BufferSize);
-	HeightmapConfig->SetNumberField(TEXT("MinX"), MinX);
-	HeightmapConfig->SetNumberField(TEXT("MaxX"), MaxX);
-	HeightmapConfig->SetNumberField(TEXT("MinY"), MinY);
-	HeightmapConfig->SetNumberField(TEXT("MaxY"), MaxY);
-	HeightmapConfig->SetNumberField(TEXT("RaycastStartZ"), RaycastStartZ);
-	HeightmapConfig->SetNumberField(TEXT("RaycastEndZ"), RaycastEndZ);
-	HeightmapConfig->SetStringField(TEXT("Description"), TEXT("Heightmap for ground and height validation using absolute integer coordinates"));
-	HeightmapConfig->SetStringField(TEXT("Usage"), TEXT("Round player X,Y to nearest sampled position and validate Z height against stored values"));
-	HeightmapConfig->SetBoolField(TEXT("IsAntiCheatReady"), true);
-	HeightmapConfig->SetStringField(TEXT("Version"), TEXT("1.0"));
+	// Add essential configuration for validation
+	TSharedPtr<FJsonObject> Config = MakeShareable(new FJsonObject);
+	Config->SetNumberField(TEXT("Resolution"), Resolution);
+	Config->SetNumberField(TEXT("MinX"), MinX);
+	Config->SetNumberField(TEXT("MaxX"), MaxX);
+	Config->SetNumberField(TEXT("MinY"), MinY);
+	Config->SetNumberField(TEXT("MaxY"), MaxY);
 	
-	HeightmapObject->SetObjectField(TEXT("Config"), HeightmapConfig);
+	HeightmapObject->SetObjectField(TEXT("Config"), Config);
 	
 	// Add quick lookup ranges for optimization
 	TSharedPtr<FJsonObject> HeightRanges = MakeShareable(new FJsonObject);
