@@ -22,6 +22,10 @@
 #include "Components/StaticMeshComponent.h"
 #include "ToSSettings.h"
 #include "Misc/DateTime.h"
+#include "Async/Async.h"
+#include "Misc/ScopedSlowTask.h"
+#include "Async/ParallelFor.h"
+#include <atomic>
 
 FNavMeshExporter::FNavMeshExporter()
 {
@@ -33,251 +37,369 @@ FNavMeshExporter::~FNavMeshExporter()
 
 void FNavMeshExporter::ExportNavMesh()
 {
-	UWorld* CurrentWorld = GEditor->GetEditorWorldContext().World();
+	UWorld* CurrentWorld = nullptr;
+	
+	// Get current world on game thread
+	if (GEditor && GEditor->GetEditorWorldContext().World())
+	{
+		CurrentWorld = GEditor->GetEditorWorldContext().World();
+	}
+
 	if (!CurrentWorld)
 	{
-		FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("No active world found!")));
-		return;
-	}
-
-	if (!HasNavMeshBoundsVolume(CurrentWorld))
-	{
-		FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("No NavMeshBoundsVolume found in current level!")));
-		return;
-	}
-
-	TSharedPtr<FJsonObject> NavMeshData = GetNavMeshData(CurrentWorld);
-	if (!NavMeshData.IsValid())
-	{
-		FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("Failed to get NavMesh data!")));
-		return;
-	}
-
-	// Generate file path using settings
-	FString LevelName = GetCurrentLevelName(CurrentWorld);
-	FString FilePath = GenerateExportFilePath(LevelName, TEXT("NavMesh"));
-
-	if (SaveJsonToFile(NavMeshData, FilePath))
-	{
-		FString SuccessMessage = FString::Printf(TEXT("NavMesh exported successfully to: %s"), *FilePath);
-		FNotificationInfo Info(FText::FromString(SuccessMessage));
+		// Show error notification on game thread
+		FNotificationInfo Info(FText::FromString("No valid world found for NavMesh export"));
+		Info.bUseThrobber = false;
+		Info.bUseSuccessFailIcons = true;
+		Info.bUseLargeFont = true;
 		Info.bFireAndForget = true;
-		Info.FadeOutDuration = 5.0f;
-		Info.ExpireDuration = 5.0f;
-		FSlateNotificationManager::Get().AddNotification(Info);
+		Info.FadeOutDuration = 4.0f;
+		Info.ExpireDuration = 4.0f;
+		FSlateNotificationManager::Get().AddNotification(Info)->SetCompletionState(SNotificationItem::CS_Fail);
+		return;
 	}
-	else
+
+	// Create progress notification on game thread and start async processing
+	AsyncTask(ENamedThreads::GameThread, [CurrentWorld]()
 	{
-		FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("Failed to save JSON file!")));
-	}
+		// Create progress notification
+		FNotificationInfo Info(FText::FromString("Exporting NavMesh..."));
+		Info.bUseThrobber = true;
+		Info.bUseSuccessFailIcons = false;
+		Info.bUseLargeFont = true;
+		Info.bFireAndForget = false;
+		Info.FadeOutDuration = 0.0f;
+		Info.ExpireDuration = 0.0f;
+		TSharedPtr<SNotificationItem> ProgressNotification = FSlateNotificationManager::Get().AddNotification(Info);
+		
+		if (ProgressNotification.IsValid())
+		{
+			ProgressNotification->SetCompletionState(SNotificationItem::CS_Pending);
+		}
+
+		// Start async export with progress tracking
+		Async(EAsyncExecution::Thread, [CurrentWorld, ProgressNotification]()
+	{
+		// Create export data in background thread
+		TSharedPtr<FJsonObject> JsonObject = CreateNavMeshExportData(CurrentWorld);
+		
+		if (!JsonObject.IsValid())
+		{
+			// Show error on game thread
+			AsyncTask(ENamedThreads::GameThread, [ProgressNotification]()
+			{
+				if (ProgressNotification.IsValid())
+				{
+					ProgressNotification->SetText(FText::FromString("Failed to extract NavMesh data"));
+					ProgressNotification->SetCompletionState(SNotificationItem::CS_Fail);
+					ProgressNotification->ExpireAndFadeout();
+				}
+			});
+			return;
+		}
+
+		// Update progress: Data extracted, now saving
+		AsyncTask(ENamedThreads::GameThread, [ProgressNotification]()
+		{
+			if (ProgressNotification.IsValid())
+			{
+				ProgressNotification->SetText(FText::FromString("Saving NavMesh file..."));
+			}
+		});
+
+		// Generate file path and save
+		FString LevelName = GetCurrentLevelName(CurrentWorld);
+		FString FilePath = GenerateExportFilePath(LevelName, TEXT("NavMesh"));
+		
+		bool bSaveSuccess = SaveJsonToFile(JsonObject, FilePath);
+		
+		// Show final result on game thread
+		AsyncTask(ENamedThreads::GameThread, [bSaveSuccess, FilePath, ProgressNotification]()
+		{
+			if (ProgressNotification.IsValid())
+			{
+				FString Message = bSaveSuccess ? 
+					FString::Printf(TEXT("NavMesh exported successfully to: %s"), *FilePath) :
+					TEXT("Failed to save NavMesh export file");
+				
+				ProgressNotification->SetText(FText::FromString(Message));
+				auto CompletionState = bSaveSuccess ? SNotificationItem::CS_Success : SNotificationItem::CS_Fail;
+				ProgressNotification->SetCompletionState(CompletionState);
+				ProgressNotification->ExpireAndFadeout();
+			}
+		});
+		});
+	});
 }
 
 void FNavMeshExporter::ExportHeightmap()
 {
-	UWorld* CurrentWorld = GEditor->GetEditorWorldContext().World();
+	UWorld* CurrentWorld = nullptr;
+	
+	// Get current world on game thread
+	if (GEditor && GEditor->GetEditorWorldContext().World())
+	{
+		CurrentWorld = GEditor->GetEditorWorldContext().World();
+	}
+
 	if (!CurrentWorld)
 	{
-		FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("No active world found!")));
+		// Show error notification on game thread
+		FNotificationInfo Info(FText::FromString("No valid world found for Heightmap export"));
+		Info.bUseThrobber = false;
+		Info.bUseSuccessFailIcons = true;
+		Info.bUseLargeFont = true;
+		Info.bFireAndForget = true;
+		Info.FadeOutDuration = 4.0f;
+		Info.ExpireDuration = 4.0f;
+		FSlateNotificationManager::Get().AddNotification(Info)->SetCompletionState(SNotificationItem::CS_Fail);
 		return;
 	}
 
-	// Get world bounds for heightmap
-	FBox WorldBounds = FBox(ForceInit);
-	
-	// Try to get bounds from NavMesh if available
-	UNavigationSystemV1* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(CurrentWorld);
+	// Create progress notification on game thread and start async processing
+	AsyncTask(ENamedThreads::GameThread, [CurrentWorld]()
+	{
+		// Create progress notification
+		FNotificationInfo Info(FText::FromString("Exporting Heightmap..."));
+		Info.bUseThrobber = true;
+		Info.bUseSuccessFailIcons = false;
+		Info.bUseLargeFont = true;
+		Info.bFireAndForget = false;
+		Info.FadeOutDuration = 0.0f;
+		Info.ExpireDuration = 0.0f;
+		TSharedPtr<SNotificationItem> ProgressNotification = FSlateNotificationManager::Get().AddNotification(Info);
+		
+		if (ProgressNotification.IsValid())
+		{
+			ProgressNotification->SetCompletionState(SNotificationItem::CS_Pending);
+		}
+
+				// Get world bounds on game thread first (TActorIterator requires game thread)
+		FBox WorldBounds = GetWorldBounds(CurrentWorld);
+		if (!WorldBounds.IsValid)
+		{
+			// Show error on game thread
+			if (ProgressNotification.IsValid())
+			{
+				ProgressNotification->SetText(FText::FromString("Invalid world bounds for heightmap export"));
+				ProgressNotification->SetCompletionState(SNotificationItem::CS_Fail);
+				ProgressNotification->ExpireAndFadeout();
+			}
+			return;
+		}
+
+		// Start async export with progress tracking
+		Async(EAsyncExecution::Thread, [CurrentWorld, ProgressNotification, WorldBounds]()
+		{
+			// Update progress: Calculating bounds
+			AsyncTask(ENamedThreads::GameThread, [ProgressNotification]()
+			{
+				if (ProgressNotification.IsValid())
+				{
+					ProgressNotification->SetText(FText::FromString("Calculated world bounds..."));
+				}
+			});
+
+		// Update progress: Extracting heightmap
+		AsyncTask(ENamedThreads::GameThread, [ProgressNotification]()
+		{
+			if (ProgressNotification.IsValid())
+			{
+				ProgressNotification->SetText(FText::FromString("Sampling heightmap data..."));
+			}
+		});
+
+		// Create heightmap data in background thread
+		TSharedPtr<FJsonObject> HeightmapData = ExtractHeightmap(CurrentWorld, WorldBounds, ProgressNotification);
+		
+		if (!HeightmapData.IsValid())
+		{
+			// Show error on game thread
+			AsyncTask(ENamedThreads::GameThread, [ProgressNotification]()
+			{
+				if (ProgressNotification.IsValid())
+				{
+					ProgressNotification->SetText(FText::FromString("Failed to extract heightmap data"));
+					ProgressNotification->SetCompletionState(SNotificationItem::CS_Fail);
+					ProgressNotification->ExpireAndFadeout();
+				}
+			});
+			return;
+		}
+
+		// Update progress: Building JSON structure
+		AsyncTask(ENamedThreads::GameThread, [ProgressNotification]()
+		{
+			if (ProgressNotification.IsValid())
+			{
+				ProgressNotification->SetText(FText::FromString("Building JSON structure..."));
+			}
+		});
+
+		// Create complete JSON structure
+		TSharedPtr<FJsonObject> JsonObject = MakeShareable(new FJsonObject);
+		FString LevelName = GetCurrentLevelName(CurrentWorld);
+		JsonObject->SetStringField(TEXT("LevelName"), LevelName);
+		JsonObject->SetObjectField(TEXT("Heightmap"), HeightmapData);
+
+		// Add level bounds
+		TSharedPtr<FJsonObject> LevelBounds = MakeShareable(new FJsonObject);
+		LevelBounds->SetNumberField(TEXT("MinX"), FMath::RoundToInt(WorldBounds.Min.X));
+		LevelBounds->SetNumberField(TEXT("MinY"), FMath::RoundToInt(WorldBounds.Min.Y));
+		LevelBounds->SetNumberField(TEXT("MinZ"), FMath::RoundToInt(WorldBounds.Min.Z));
+		LevelBounds->SetNumberField(TEXT("MaxX"), FMath::RoundToInt(WorldBounds.Max.X));
+		LevelBounds->SetNumberField(TEXT("MaxY"), FMath::RoundToInt(WorldBounds.Max.Y));
+		LevelBounds->SetNumberField(TEXT("MaxZ"), FMath::RoundToInt(WorldBounds.Max.Z));
+		JsonObject->SetObjectField(TEXT("LevelBounds"), LevelBounds);
+
+		// Update progress: Saving file
+		AsyncTask(ENamedThreads::GameThread, [ProgressNotification]()
+		{
+			if (ProgressNotification.IsValid())
+			{
+				ProgressNotification->SetText(FText::FromString("Saving heightmap file..."));
+			}
+		});
+
+		// Generate file path and save
+		FString FilePath = GenerateExportFilePath(LevelName, TEXT("Heightmap"));
+		bool bSaveSuccess = SaveJsonToFile(JsonObject, FilePath);
+		
+		// Show final result on game thread
+		AsyncTask(ENamedThreads::GameThread, [bSaveSuccess, FilePath, ProgressNotification]()
+		{
+			if (ProgressNotification.IsValid())
+			{
+				FString Message = bSaveSuccess ? 
+					FString::Printf(TEXT("Heightmap exported successfully to: %s"), *FilePath) :
+					TEXT("Failed to save Heightmap export file");
+				
+				ProgressNotification->SetText(FText::FromString(Message));
+				auto CompletionState = bSaveSuccess ? SNotificationItem::CS_Success : SNotificationItem::CS_Fail;
+				ProgressNotification->SetCompletionState(CompletionState);
+				ProgressNotification->ExpireAndFadeout();
+			}
+		});
+		});
+	});
+}
+
+FBox FNavMeshExporter::GetWorldBounds(UWorld* World)
+{
+	if (!World || !IsValid(World))
+	{
+		return FBox(ForceInit);
+	}
+
+	// Ensure we're on the game thread for actor iteration
+	check(IsInGameThread());
+
+	FBox WorldBounds(ForceInit);
+
+	// Use a safer approach - get bounds from navigation system if available
+	UNavigationSystemV1* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(World);
 	if (NavSys)
 	{
 		ANavigationData* NavData = NavSys->GetDefaultNavDataInstance();
-		if (NavData && NavData->GetBounds().IsValid)
+		if (NavData && IsValid(NavData))
 		{
-			WorldBounds = NavData->GetBounds();
-		}
-	}
-	
-	// If no NavMesh bounds, use level bounds
-	if (!WorldBounds.IsValid)
-	{
-		// Get bounds from all static mesh actors in the level
-		for (TActorIterator<AStaticMeshActor> ActorIterator(CurrentWorld); ActorIterator; ++ActorIterator)
-		{
-			AStaticMeshActor* MeshActor = *ActorIterator;
-			if (MeshActor && IsValid(MeshActor))
+			FBox NavBounds = NavData->GetBounds();
+			if (NavBounds.IsValid)
 			{
-				FBox ActorBounds = MeshActor->GetComponentsBoundingBox();
-				if (ActorBounds.IsValid)
-				{
-					WorldBounds += ActorBounds;
-				}
+				// Expand nav bounds slightly for heightmap sampling
+				WorldBounds = NavBounds.ExpandBy(500.0f);
+				return WorldBounds;
 			}
 		}
-		
-		// Get bounds from landscape (using base class to avoid linkage issues)
-		for (TActorIterator<AActor> ActorIterator(CurrentWorld); ActorIterator; ++ActorIterator)
+	}
+
+	// Fallback: iterate through actors safely
+	try
+	{
+		// Include static mesh actors
+		for (TActorIterator<AStaticMeshActor> ActorIterator(World); ActorIterator; ++ActorIterator)
+		{
+			AStaticMeshActor* StaticMeshActor = *ActorIterator;
+			if (IsValid(StaticMeshActor))
+			{
+				WorldBounds += StaticMeshActor->GetActorLocation();
+			}
+		}
+
+		// Include landscape actors using safer iteration
+		for (TActorIterator<AActor> ActorIterator(World); ActorIterator; ++ActorIterator)
 		{
 			AActor* Actor = *ActorIterator;
-			if (Actor && IsValid(Actor) && Actor->GetClass()->GetName().Contains(TEXT("Landscape")))
+			if (IsValid(Actor) && Actor->GetClass()->GetName().Contains(TEXT("Landscape")))
 			{
-				FBox LandscapeBounds = Actor->GetComponentsBoundingBox();
-				if (LandscapeBounds.IsValid)
-				{
-					WorldBounds += LandscapeBounds;
-				}
+				WorldBounds += Actor->GetActorLocation();
 			}
 		}
 	}
-	
-	// Ensure we have valid bounds
+	catch (...)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Exception during world bounds calculation, using default bounds"));
+	}
+
+	// Ensure bounds are valid and have minimum size
 	if (!WorldBounds.IsValid)
 	{
-		FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("Could not determine level bounds for heightmap export!")));
-		return;
+		WorldBounds = FBox(FVector(-5000, -5000, -1000), FVector(5000, 5000, 1000));
 	}
 
-	// Extract heightmap data
-	TSharedPtr<FJsonObject> HeightmapData = ExtractHeightmap(CurrentWorld, WorldBounds);
-	if (!HeightmapData.IsValid())
-	{
-		FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("Failed to extract heightmap data!")));
-		return;
-	}
-
-	// Create JSON structure for heightmap export
-	TSharedPtr<FJsonObject> JsonObject = MakeShareable(new FJsonObject);
-	FString LevelName = GetCurrentLevelName(CurrentWorld);
-	
-	JsonObject->SetStringField(TEXT("LevelName"), LevelName);
-	JsonObject->SetStringField(TEXT("ExportTime"), FDateTime::Now().ToString());
-	JsonObject->SetStringField(TEXT("ExportType"), TEXT("Heightmap"));
-	JsonObject->SetObjectField(TEXT("Heightmap"), HeightmapData);
-	
-	// Add level bounds information
-	TSharedPtr<FJsonObject> LevelBounds = MakeShareable(new FJsonObject);
-	LevelBounds->SetNumberField(TEXT("MinX"), WorldBounds.Min.X);
-	LevelBounds->SetNumberField(TEXT("MinY"), WorldBounds.Min.Y);
-	LevelBounds->SetNumberField(TEXT("MinZ"), WorldBounds.Min.Z);
-	LevelBounds->SetNumberField(TEXT("MaxX"), WorldBounds.Max.X);
-	LevelBounds->SetNumberField(TEXT("MaxY"), WorldBounds.Max.Y);
-	LevelBounds->SetNumberField(TEXT("MaxZ"), WorldBounds.Max.Z);
-	JsonObject->SetObjectField(TEXT("LevelBounds"), LevelBounds);
-
-	// Generate file path using settings
-	FString FilePath = GenerateExportFilePath(LevelName, TEXT("Heightmap"));
-
-	// Save JSON file
-	if (SaveJsonToFile(JsonObject, FilePath))
-	{
-		FString SuccessMessage = FString::Printf(TEXT("Heightmap exported successfully to: %s"), *FilePath);
-		
-		// Show success notification
-		FNotificationInfo Info(FText::FromString(SuccessMessage));
-		Info.bFireAndForget = true;
-		Info.FadeOutDuration = 5.0f;
-		Info.ExpireDuration = 5.0f;
-		FSlateNotificationManager::Get().AddNotification(Info);
-	}
-	else
-	{
-		FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("Failed to save heightmap JSON file!")));
-	}
+	return WorldBounds;
 }
 
-bool FNavMeshExporter::HasNavMeshBoundsVolume(UWorld* World)
+TSharedPtr<FJsonObject> FNavMeshExporter::CreateNavMeshExportData(UWorld* World)
 {
-	if (!World)
+	if (!World || !IsValid(World))
 	{
-		return false;
-	}
-
-	for (TActorIterator<ANavMeshBoundsVolume> ActorIterator(World); ActorIterator; ++ActorIterator)
-	{
-		ANavMeshBoundsVolume* NavMeshBounds = *ActorIterator;
-		if (NavMeshBounds && IsValid(NavMeshBounds))
-		{
-			return true;
-		}
-	}
-
-	return false;
-}
-
-TSharedPtr<FJsonObject> FNavMeshExporter::GetNavMeshData(UWorld* World)
-{
-	if (!World)
-	{
+		UE_LOG(LogTemp, Error, TEXT("Invalid world for NavMesh export"));
 		return nullptr;
 	}
 
 	TSharedPtr<FJsonObject> JsonObject = MakeShareable(new FJsonObject);
-	
 	FString LevelName = GetCurrentLevelName(World);
 	JsonObject->SetStringField(TEXT("LevelName"), LevelName);
-	JsonObject->SetStringField(TEXT("ExportTime"), FDateTime::Now().ToString());
 
+	// Get Navigation System
 	UNavigationSystemV1* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(World);
 	if (!NavSys)
 	{
-		return JsonObject;
+		UE_LOG(LogTemp, Error, TEXT("No Navigation System found"));
+		return nullptr;
 	}
 
 	TArray<TSharedPtr<FJsonValue>> NavMeshArray;
 
-	TArray<ANavMeshBoundsVolume*> NavMeshBounds;
-	for (TActorIterator<ANavMeshBoundsVolume> ActorIterator(World); ActorIterator; ++ActorIterator)
-	{
-		ANavMeshBoundsVolume* NavMeshVolume = *ActorIterator;
-		if (NavMeshVolume && IsValid(NavMeshVolume))
-		{
-			NavMeshBounds.Add(NavMeshVolume);
-		}
-	}
-
-	// Get NavMesh data (simplified for server validation)
+	// Get NavMesh data - ultra-compact format
 	ANavigationData* NavData = NavSys->GetDefaultNavDataInstance();
 	if (NavData)
 	{
-		TSharedPtr<FJsonObject> NavMeshObject = MakeShareable(new FJsonObject);
-		
-		// Only essential bounds information
-		FBox NavDataBounds = NavData->GetBounds();
-		if (NavDataBounds.IsValid)
-		{
-			TSharedPtr<FJsonObject> BoundsObject = MakeShareable(new FJsonObject);
-			BoundsObject->SetNumberField(TEXT("MinX"), FMath::RoundToInt(NavDataBounds.Min.X));
-			BoundsObject->SetNumberField(TEXT("MinY"), FMath::RoundToInt(NavDataBounds.Min.Y));
-			BoundsObject->SetNumberField(TEXT("MinZ"), FMath::RoundToInt(NavDataBounds.Min.Z));
-			BoundsObject->SetNumberField(TEXT("MaxX"), FMath::RoundToInt(NavDataBounds.Max.X));
-			BoundsObject->SetNumberField(TEXT("MaxY"), FMath::RoundToInt(NavDataBounds.Max.Y));
-			BoundsObject->SetNumberField(TEXT("MaxZ"), FMath::RoundToInt(NavDataBounds.Max.Z));
-			NavMeshObject->SetObjectField(TEXT("Bounds"), BoundsObject);
-		}
-		
 		ARecastNavMesh* RecastNavMesh = Cast<ARecastNavMesh>(NavData);
 		if (RecastNavMesh)
 		{
-			// Add triangulation data
+			// Direct triangulation data - no wrapper objects
 			TSharedPtr<FJsonObject> TriangulationData = ExtractNavMeshTriangulation(RecastNavMesh);
 			if (TriangulationData.IsValid())
 			{
-				NavMeshObject->SetObjectField(TEXT("NavMesh"), TriangulationData);
+				NavMeshArray.Add(MakeShareable(new FJsonValueObject(TriangulationData)));
 			}
 			
 			// Optionally add heightmap data based on settings
 			const UToSSettings* ExportSettings = UToSSettings::Get();
 			if (ExportSettings->bIncludeHeightmapWithNavMesh)
 			{
-				TSharedPtr<FJsonObject> HeightmapData = ExtractHeightmap(World, NavData->GetBounds());
+				TSharedPtr<FJsonObject> HeightmapData = ExtractHeightmap(World, NavData->GetBounds(), nullptr);
 				if (HeightmapData.IsValid())
 				{
-					NavMeshObject->SetObjectField(TEXT("Heightmap"), HeightmapData);
+					JsonObject->SetObjectField(TEXT("H"), HeightmapData);
 				}
 			}
 		}
-
-		NavMeshArray.Add(MakeShareable(new FJsonValueObject(NavMeshObject)));
 	}
 
-	JsonObject->SetArrayField(TEXT("NavMeshData"), NavMeshArray);
+	JsonObject->SetArrayField(TEXT("N"), NavMeshArray);
 
 	return JsonObject;
 }
@@ -286,173 +408,222 @@ TSharedPtr<FJsonObject> FNavMeshExporter::ExtractNavMeshTriangulation(ARecastNav
 {
 	if (!RecastNavMesh || !IsValid(RecastNavMesh))
 	{
+		UE_LOG(LogTemp, Error, TEXT("Invalid RecastNavMesh for triangulation"));
 		return nullptr;
 	}
+
+	UE_LOG(LogTemp, Log, TEXT("Starting NavMesh triangulation extraction..."));
 
 	TSharedPtr<FJsonObject> TriangulationObject = MakeShareable(new FJsonObject);
 	
 	TArray<TSharedPtr<FJsonValue>> VerticesArray;
 	TArray<TSharedPtr<FJsonValue>> TrianglesArray;
 	
-	int32 TotalVertices = 0;
-	int32 TotalTriangles = 0;
-	
-	// Get settings for triangle limits
+	// Get settings for triangle limits and grid size
 	const UToSSettings* TriangleSettings = UToSSettings::Get();
 	
-	// Extract triangulation using surface sampling instead of direct generator access
-	if (true) // Always proceed with surface sampling
-	{
-		TArray<FVector> NavVertices;
-		TArray<int32> NavTriangles;
-				
-		FBox NavBounds = RecastNavMesh->GetBounds();
-		if (NavBounds.IsValid)
-		{
-			// Higher resolution for better triangulation data
-			const int32 GridSize = 100;
-			const FVector BoundsSize = NavBounds.GetSize();
-			const FVector StepSize = BoundsSize / GridSize;
-			
-			TMap<FVector, int32> VertexIndexMap; // To avoid duplicate vertices
-			
-			for (int32 X = 0; X <= GridSize; X++)
-			{
-				for (int32 Y = 0; Y <= GridSize; Y++)
-				{
-					// Project from above the NavMesh bounds for better accuracy
-					FVector TestLocation = NavBounds.Min + FVector(X * StepSize.X, Y * StepSize.Y, NavBounds.Max.Z + 100.0f);
-					FNavLocation NavLoc;
-					FVector ProjectExtent(25.0f, 25.0f, NavBounds.GetSize().Z + 200.0f);
-
-					if (RecastNavMesh->ProjectPoint(TestLocation, NavLoc, ProjectExtent))
-					{
-						// Round coordinates to reduce duplicate vertices
-						FVector RoundedLoc = FVector(
-							FMath::RoundToFloat(NavLoc.Location.X * 10.0f) / 10.0f,
-							FMath::RoundToFloat(NavLoc.Location.Y * 10.0f) / 10.0f,
-							FMath::RoundToFloat(NavLoc.Location.Z * 10.0f) / 10.0f
-						);
-						
-						// Only add unique vertices
-						if (!VertexIndexMap.Contains(RoundedLoc))
-						{
-							int32 VertexIndex = NavVertices.Num();
-							NavVertices.Add(RoundedLoc);
-							VertexIndexMap.Add(RoundedLoc, VertexIndex);
-						}
-					}
-				}
-			}
-		}
-		
-		// Convert vertices to JSON format (simplified for server validation)
-		for (int32 i = 0; i < NavVertices.Num(); i++)
-		{
-			TSharedPtr<FJsonObject> VertexObject = MakeShareable(new FJsonObject);
-			VertexObject->SetNumberField(TEXT("X"), FMath::RoundToInt(NavVertices[i].X));
-			VertexObject->SetNumberField(TEXT("Y"), FMath::RoundToInt(NavVertices[i].Y));
-			VertexObject->SetNumberField(TEXT("Z"), FMath::RoundToInt(NavVertices[i].Z));
-			
-			VerticesArray.Add(MakeShareable(new FJsonValueObject(VertexObject)));
-		}
-		
-		// Create more sophisticated triangulation based on proximity
-		// This creates triangles between nearby vertices rather than a rigid grid
-		const float MaxTriangleDistance = 300.0f; // Maximum distance between vertices in a triangle
-		
-		for (int32 i = 0; i < NavVertices.Num(); i++)
-		{
-			for (int32 j = i + 1; j < NavVertices.Num(); j++)
-			{
-				for (int32 k = j + 1; k < NavVertices.Num(); k++)
-				{
-					FVector V1 = NavVertices[i];
-					FVector V2 = NavVertices[j];
-					FVector V3 = NavVertices[k];
-					
-					// Check if vertices are close enough to form a valid triangle
-					float Dist12 = FVector::Dist(V1, V2);
-					float Dist23 = FVector::Dist(V2, V3);
-					float Dist31 = FVector::Dist(V3, V1);
-					
-					if (Dist12 < MaxTriangleDistance && Dist23 < MaxTriangleDistance && Dist31 < MaxTriangleDistance)
-					{
-						// Calculate triangle area to avoid degenerate triangles
-						FVector CrossProduct = FVector::CrossProduct(V2 - V1, V3 - V1);
-						float TriangleArea = CrossProduct.Size() * 0.5f;
-						
-						// Only create triangles with reasonable area
-						if (TriangleArea > 500.0f)
-						{
-							// Simplified triangle data - only indices
-							TSharedPtr<FJsonObject> TriangleObject = MakeShareable(new FJsonObject);
-							TriangleObject->SetNumberField(TEXT("V0"), i);
-							TriangleObject->SetNumberField(TEXT("V1"), j);
-							TriangleObject->SetNumberField(TEXT("V2"), k);
-							
-							TrianglesArray.Add(MakeShareable(new FJsonValueObject(TriangleObject)));
-							TotalTriangles++;
-							
-							// Limit number of triangles based on settings
-							if (TotalTriangles >= TriangleSettings->MaxTriangles)
-							{
-								break;
-							}
-						}
-					}
-				}
-				if (TotalTriangles >= TriangleSettings->MaxTriangles) break;
-			}
-			if (TotalTriangles >= TriangleSettings->MaxTriangles) break;
-		}
-		
-		TotalVertices = NavVertices.Num();
-	}
-
-	// Simplified NavMesh data - only essentials for server validation
-	TriangulationObject->SetArrayField(TEXT("Vertices"), VerticesArray);
-	TriangulationObject->SetArrayField(TEXT("Triangles"), TrianglesArray);
-	TriangulationObject->SetNumberField(TEXT("VertexCount"), TotalVertices);
-	TriangulationObject->SetNumberField(TEXT("TriangleCount"), TotalTriangles);
-	
-	// Add only essential bounds for validation
 	FBox NavBounds = RecastNavMesh->GetBounds();
-	if (NavBounds.IsValid)
+	if (!NavBounds.IsValid)
 	{
-		TSharedPtr<FJsonObject> Bounds = MakeShareable(new FJsonObject);
-		Bounds->SetNumberField(TEXT("MinX"), FMath::RoundToInt(NavBounds.Min.X));
-		Bounds->SetNumberField(TEXT("MinY"), FMath::RoundToInt(NavBounds.Min.Y));
-		Bounds->SetNumberField(TEXT("MinZ"), FMath::RoundToInt(NavBounds.Min.Z));
-		Bounds->SetNumberField(TEXT("MaxX"), FMath::RoundToInt(NavBounds.Max.X));
-		Bounds->SetNumberField(TEXT("MaxY"), FMath::RoundToInt(NavBounds.Max.Y));
-		Bounds->SetNumberField(TEXT("MaxZ"), FMath::RoundToInt(NavBounds.Max.Z));
-		TriangulationObject->SetObjectField(TEXT("Bounds"), Bounds);
-	}
-	
-	return TriangulationObject;
-}
-
-TSharedPtr<FJsonObject> FNavMeshExporter::ExtractHeightmap(UWorld* World, const FBox& Bounds)
-{
-	if (!World || !Bounds.IsValid)
-	{
+		UE_LOG(LogTemp, Error, TEXT("Invalid NavMesh bounds"));
 		return nullptr;
 	}
 
+	// Use configurable grid size from settings (default to reasonable value if not set)
+	int32 GridSize = FMath::Clamp(TriangleSettings->MaxTriangles / 10, 50, 200);
+	const FVector BoundsSize = NavBounds.GetSize();
+	const FVector StepSize = BoundsSize / GridSize;
+	
+	UE_LOG(LogTemp, Log, TEXT("Grid size: %d, Bounds: %s"), GridSize, *NavBounds.ToString());
+
+	// Thread-safe containers for parallel processing
+	TArray<FVector> ValidNavPoints;
+	FCriticalSection ValidNavPointsLock;
+
+	// Create progress tracker for UI thread updates
+	std::atomic<bool> bCancelled{false};
+	
+	// Show progress on game thread
+	AsyncTask(ENamedThreads::GameThread, [GridSize]()
+	{
+		FScopedSlowTask SlowTask(100.0f, FText::FromString(TEXT("Extracting NavMesh triangulation...")));
+		SlowTask.MakeDialog();
+	});
+
+	// Phase 1: Sample NavMesh points in parallel
+	{
+		const int32 TotalSamples = (GridSize + 1) * (GridSize + 1);
+		TArray<TPair<int32, int32>> GridIndices;
+		GridIndices.Reserve(TotalSamples);
+		
+		// Pre-generate grid indices for parallel processing
+		for (int32 X = 0; X <= GridSize; X++)
+		{
+			for (int32 Y = 0; Y <= GridSize; Y++)
+			{
+				GridIndices.Add(TPair<int32, int32>(X, Y));
+			}
+		}
+
+		// Parallel sampling of NavMesh points
+		ParallelFor(GridIndices.Num(), [&](int32 Index)
+		{
+			if (bCancelled.load())
+			{
+				return;
+			}
+
+			const TPair<int32, int32>& GridIndex = GridIndices[Index];
+			int32 X = GridIndex.Key;
+			int32 Y = GridIndex.Value;
+			
+			// Project from above the NavMesh bounds for better accuracy
+			FVector TestLocation = NavBounds.Min + FVector(X * StepSize.X, Y * StepSize.Y, NavBounds.Max.Z + 100.0f);
+			FNavLocation NavLoc;
+			FVector ProjectExtent(25.0f, 25.0f, NavBounds.GetSize().Z + 200.0f);
+
+			if (RecastNavMesh->ProjectPoint(TestLocation, NavLoc, ProjectExtent))
+			{
+				// Round coordinates to reduce duplicate vertices
+				FVector RoundedLoc = FVector(
+					FMath::RoundToFloat(NavLoc.Location.X * 10.0f) / 10.0f,
+					FMath::RoundToFloat(NavLoc.Location.Y * 10.0f) / 10.0f,
+					FMath::RoundToFloat(NavLoc.Location.Z * 10.0f) / 10.0f
+				);
+				
+				// Thread-safe addition to valid points
+				{
+					FScopeLock Lock(&ValidNavPointsLock);
+					ValidNavPoints.AddUnique(RoundedLoc);
+				}
+			}
+		});
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("Found %d valid NavMesh points"), ValidNavPoints.Num());
+
+	if (ValidNavPoints.Num() < 3)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Insufficient NavMesh points for triangulation"));
+		return nullptr;
+	}
+
+	// Phase 2: Convert vertices to JSON format (compact array format)
+	for (int32 i = 0; i < ValidNavPoints.Num(); i++)
+	{
+		TArray<TSharedPtr<FJsonValue>> VertexArray;
+		VertexArray.Add(MakeShareable(new FJsonValueNumber(FMath::RoundToInt(ValidNavPoints[i].X))));
+		VertexArray.Add(MakeShareable(new FJsonValueNumber(FMath::RoundToInt(ValidNavPoints[i].Y))));
+		VertexArray.Add(MakeShareable(new FJsonValueNumber(FMath::RoundToInt(ValidNavPoints[i].Z))));
+		
+		VerticesArray.Add(MakeShareable(new FJsonValueArray(VertexArray)));
+	}
+
+	// Phase 3: Optimized Grid-Based Triangulation (O(N²) instead of O(N³))
+	{
+		TArray<TArray<int32>> GridPointMap;
+		GridPointMap.SetNum(GridSize + 1);
+		for (int32 i = 0; i <= GridSize; i++)
+		{
+			GridPointMap[i].SetNum(GridSize + 1);
+			for (int32 j = 0; j <= GridSize; j++)
+			{
+				GridPointMap[i][j] = -1; // Invalid index
+			}
+		}
+
+		// Map valid points back to grid positions
+		for (int32 PointIndex = 0; PointIndex < ValidNavPoints.Num(); PointIndex++)
+		{
+			const FVector& Point = ValidNavPoints[PointIndex];
+			int32 GridX = FMath::RoundToInt((Point.X - NavBounds.Min.X) / StepSize.X);
+			int32 GridY = FMath::RoundToInt((Point.Y - NavBounds.Min.Y) / StepSize.Y);
+			
+			if (GridX >= 0 && GridX <= GridSize && GridY >= 0 && GridY <= GridSize)
+			{
+				GridPointMap[GridX][GridY] = PointIndex;
+			}
+		}
+
+		// Generate triangles using grid topology (quad to tri conversion)
+		int32 TotalTriangles = 0;
+		const int32 MaxTriangles = TriangleSettings->MaxTriangles;
+
+		for (int32 X = 0; X < GridSize && TotalTriangles < MaxTriangles; X++)
+		{
+			for (int32 Y = 0; Y < GridSize && TotalTriangles < MaxTriangles; Y++)
+			{
+				// Get four corners of current grid cell
+				int32 P0 = GridPointMap[X][Y];         // Bottom-left
+				int32 P1 = GridPointMap[X+1][Y];       // Bottom-right
+				int32 P2 = GridPointMap[X][Y+1];       // Top-left
+				int32 P3 = GridPointMap[X+1][Y+1];     // Top-right
+
+				// Only create triangles if all four points are valid
+				if (P0 >= 0 && P1 >= 0 && P2 >= 0 && P3 >= 0)
+				{
+					// Create two triangles from quad: (P0,P1,P2) and (P1,P3,P2)
+					
+					// Triangle 1: P0 -> P1 -> P2
+					{
+						TArray<TSharedPtr<FJsonValue>> TriangleArray;
+						TriangleArray.Add(MakeShareable(new FJsonValueNumber(P0)));
+						TriangleArray.Add(MakeShareable(new FJsonValueNumber(P1)));
+						TriangleArray.Add(MakeShareable(new FJsonValueNumber(P2)));
+						
+						TrianglesArray.Add(MakeShareable(new FJsonValueArray(TriangleArray)));
+						TotalTriangles++;
+					}
+
+					// Triangle 2: P1 -> P3 -> P2
+					if (TotalTriangles < MaxTriangles)
+					{
+						TArray<TSharedPtr<FJsonValue>> TriangleArray;
+						TriangleArray.Add(MakeShareable(new FJsonValueNumber(P1)));
+						TriangleArray.Add(MakeShareable(new FJsonValueNumber(P3)));
+						TriangleArray.Add(MakeShareable(new FJsonValueNumber(P2)));
+						
+						TrianglesArray.Add(MakeShareable(new FJsonValueArray(TriangleArray)));
+						TotalTriangles++;
+					}
+				}
+			}
+		}
+
+		UE_LOG(LogTemp, Log, TEXT("Generated %d triangles from grid topology"), TotalTriangles);
+	}
+
+	// Ultra-compact NavMesh data - minimal structure
+	TriangulationObject->SetArrayField(TEXT("V"), VerticesArray);
+	TriangulationObject->SetArrayField(TEXT("T"), TrianglesArray);
+	
+	UE_LOG(LogTemp, Log, TEXT("NavMesh triangulation extraction completed"));
+	return TriangulationObject;
+}
+
+TSharedPtr<FJsonObject> FNavMeshExporter::ExtractHeightmap(UWorld* World, const FBox& Bounds, TSharedPtr<SNotificationItem> ProgressNotification)
+{
+	if (!World || !IsValid(World) || !Bounds.IsValid)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Invalid parameters for heightmap extraction"));
+		return nullptr;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("Starting heightmap extraction..."));
+
 	TSharedPtr<FJsonObject> HeightmapObject = MakeShareable(new FJsonObject);
 	
-	// Array to store heightmap data
-	TArray<TSharedPtr<FJsonValue>> HeightmapArray;
+	// Thread-safe containers for heightmap data
 	TMap<FString, TArray<int32>> HeightGrid; // Key: "X,Y", Value: Array of Z heights as int32
+	FCriticalSection HeightGridLock;
 	
-	// Configure raycast parameters
+	// Configure raycast parameters (thread-safe read-only data)
 	FCollisionQueryParams QueryParams;
 	QueryParams.bTraceComplex = true;
 	QueryParams.bReturnPhysicalMaterial = false;
 	QueryParams.TraceTag = FName("HeightmapTrace");
 	
-	// Set collision channels to trace - use more conservative approach
+	// Set collision channels to trace
 	FCollisionObjectQueryParams ObjectQueryParams;
 	ObjectQueryParams.AddObjectTypesToQuery(ECollisionChannel::ECC_WorldStatic);
 	
@@ -467,70 +638,121 @@ TSharedPtr<FJsonObject> FNavMeshExporter::ExtractHeightmap(UWorld* World, const 
 	int32 MaxY = FMath::CeilToInt(BoundsMax.Y);
 	
 	// Add buffer zone around bounds for better coverage
-	int32 BufferSize = 500; // 5 meters buffer
+	const int32 BufferSize = 1000;
 	MinX -= BufferSize;
-	MaxX += BufferSize;
 	MinY -= BufferSize;
+	MaxX += BufferSize;
 	MaxY += BufferSize;
 	
 	// Get resolution from settings
 	const UToSSettings* Settings = UToSSettings::Get();
 	int32 Resolution = Settings->HeightmapResolution;
-	int32 TotalSamples = 0;
-	int32 ValidHits = 0;
 	
 	// Define raycast height range
-	float RaycastStartZ = BoundsMax.Z + 2000.0f; // Start 20 meters above max bound
-	float RaycastEndZ = BoundsMin.Z - 2000.0f;   // End 20 meters below min bound
+	float RaycastStartZ = BoundsMax.Z + 2000.0f;
+	float RaycastEndZ = BoundsMin.Z - 2000.0f;
 	
-	// Perform raycast grid sampling
+	// Calculate total samples for progress tracking
+	const int32 XSamples = (MaxX - MinX) / Resolution + 1;
+	const int32 YSamples = (MaxY - MinY) / Resolution + 1;
+	const int32 TotalSamples = XSamples * YSamples;
+	
+	UE_LOG(LogTemp, Log, TEXT("Heightmap sampling: %d x %d = %d total samples"), XSamples, YSamples, TotalSamples);
+
+	// Thread-safe counters
+	std::atomic<int32> ProcessedSamples(0);
+	std::atomic<int32> ValidHits(0);
+	std::atomic<bool> bCancelled{false};
+
+	// Pre-generate sample coordinates for parallel processing
+	TArray<TPair<int32, int32>> SampleCoords;
+	SampleCoords.Reserve(TotalSamples);
+	
 	for (int32 X = MinX; X <= MaxX; X += Resolution)
 	{
 		for (int32 Y = MinY; Y <= MaxY; Y += Resolution)
 		{
-			TotalSamples++;
+			SampleCoords.Add(TPair<int32, int32>(X, Y));
+		}
+	}
+
+	// Parallel heightmap sampling
+	ParallelFor(SampleCoords.Num(), [&](int32 Index)
+	{
+		if (bCancelled.load())
+		{
+			return;
+		}
+
+		const TPair<int32, int32>& Coord = SampleCoords[Index];
+		int32 X = Coord.Key;
+		int32 Y = Coord.Value;
+		
+		// Create raycast from above to below
+		FVector StartLocation(X, Y, RaycastStartZ);
+		FVector EndLocation(X, Y, RaycastEndZ);
+		
+		TArray<FHitResult> HitResults;
+		
+		// Multi-line trace to get ALL surfaces at this X,Y position
+		bool bHit = World->LineTraceMultiByObjectType(
+			HitResults,
+			StartLocation,
+			EndLocation,
+			ObjectQueryParams,
+			QueryParams
+		);
+		
+		ProcessedSamples.fetch_add(1);
+		
+		if (bHit && HitResults.Num() > 0)
+		{
+			ValidHits.fetch_add(1);
 			
-			// Create raycast from above to below
-			FVector StartLocation(X, Y, RaycastStartZ);
-			FVector EndLocation(X, Y, RaycastEndZ);
+			// Collect all hit heights for this X,Y position
+			FString GridKey = FString::Printf(TEXT("%d,%d"), X, Y);
+			TArray<int32> Heights;
 			
-			TArray<FHitResult> HitResults;
-			
-			// Multi-line trace to get ALL surfaces at this X,Y position
-			bool bHit = World->LineTraceMultiByObjectType(
-				HitResults,
-				StartLocation,
-				EndLocation,
-				ObjectQueryParams,
-				QueryParams
-			);
-			
-			if (bHit && HitResults.Num() > 0)
+			for (const FHitResult& Hit : HitResults)
 			{
-				ValidHits++;
-				
-				// Collect all hit heights for this X,Y position
-				FString GridKey = FString::Printf(TEXT("%d,%d"), X, Y);
-				TArray<int32> Heights;
-				
-				for (const FHitResult& Hit : HitResults)
+				if (Hit.bBlockingHit)
 				{
-					if (Hit.bBlockingHit)
-					{
-						// Convert Z to int32 (rounded)
-						int32 HitZ = FMath::RoundToInt(Hit.Location.Z);
-						Heights.AddUnique(HitZ); // AddUnique to avoid duplicate heights
-					}
+					// Convert Z to int32 (rounded)
+					int32 HitZ = FMath::RoundToInt(Hit.Location.Z);
+					Heights.AddUnique(HitZ);
 				}
-				
-				// Sort heights and store for quick lookup
-				Heights.Sort();
+			}
+			
+			// Sort heights and store in thread-safe manner
+			Heights.Sort();
+			{
+				FScopeLock Lock(&HeightGridLock);
 				HeightGrid.Add(GridKey, Heights);
 			}
 		}
-	}
-	
-	// Now create JSON entries from the collected height grid (one entry per X,Y position)
+		
+		// Update progress periodically on game thread
+		if (Index % 1000 == 0)
+		{
+			int32 CurrentProgress = ProcessedSamples.load();
+			float ProgressPercent = (float)CurrentProgress / TotalSamples * 100.0f;
+			
+			AsyncTask(ENamedThreads::GameThread, [ProgressPercent, ProgressNotification]()
+			{
+				if (ProgressNotification.IsValid())
+				{
+					FString ProgressText = FString::Printf(TEXT("Sampling heightmap data... %.1f%%"), ProgressPercent);
+					ProgressNotification->SetText(FText::FromString(ProgressText));
+				}
+				UE_LOG(LogTemp, Log, TEXT("Heightmap progress: %.1f%%"), ProgressPercent);
+			});
+		}
+	});
+
+	UE_LOG(LogTemp, Log, TEXT("Heightmap sampling completed: %d/%d valid hits"), ValidHits.load(), ProcessedSamples.load());
+
+	// Convert height grid to JSON format
+	TArray<TSharedPtr<FJsonValue>> HeightmapArray;
 	for (auto& Entry : HeightGrid)
 	{
 		// Parse X,Y from key
@@ -544,12 +766,12 @@ TSharedPtr<FJsonObject> FNavMeshExporter::ExtractHeightmap(UWorld* World, const 
 			int32 GridY = FCString::Atoi(*Coordinates[1]);
 			TArray<int32>& Heights = Entry.Value;
 			
-			// Create JSON entry for this X,Y position
+			// Create compact JSON entry - simplified format
 			TSharedPtr<FJsonObject> HeightEntry = MakeShareable(new FJsonObject);
 			HeightEntry->SetNumberField(TEXT("X"), GridX);
 			HeightEntry->SetNumberField(TEXT("Y"), GridY);
 			
-			// Add all Z heights as array
+			// Only Z heights array (removed MinZ, MaxZ, HeightCount duplication)
 			TArray<TSharedPtr<FJsonValue>> ZHeights;
 			for (int32 Height : Heights)
 			{
@@ -557,51 +779,16 @@ TSharedPtr<FJsonObject> FNavMeshExporter::ExtractHeightmap(UWorld* World, const 
 			}
 			HeightEntry->SetArrayField(TEXT("Z"), ZHeights);
 			
-			// Add min/max for quick validation
-			HeightEntry->SetNumberField(TEXT("MinZ"), Heights.Num() > 0 ? Heights[0] : 0);
-			HeightEntry->SetNumberField(TEXT("MaxZ"), Heights.Num() > 0 ? Heights.Last() : 0);
-			HeightEntry->SetNumberField(TEXT("HeightCount"), Heights.Num());
-			
 			HeightmapArray.Add(MakeShareable(new FJsonValueObject(HeightEntry)));
 		}
 	}
+
+	// Set minimal heightmap data - only essential information
+	HeightmapObject->SetArrayField(TEXT("Data"), HeightmapArray);
+	HeightmapObject->SetNumberField(TEXT("SampleCount"), ProcessedSamples.load());
+	HeightmapObject->SetNumberField(TEXT("ValidHits"), ValidHits.load());
 	
-	// Set heightmap data
-	HeightmapObject->SetArrayField(TEXT("HeightData"), HeightmapArray);
-	HeightmapObject->SetNumberField(TEXT("TotalSamples"), TotalSamples);
-	HeightmapObject->SetNumberField(TEXT("ValidHits"), ValidHits);
-	HeightmapObject->SetNumberField(TEXT("HitRate"), TotalSamples > 0 ? (float)ValidHits / TotalSamples : 0.0f);
-	
-	// Add essential configuration for validation
-	TSharedPtr<FJsonObject> Config = MakeShareable(new FJsonObject);
-	Config->SetNumberField(TEXT("Resolution"), Resolution);
-	Config->SetNumberField(TEXT("MinX"), MinX);
-	Config->SetNumberField(TEXT("MaxX"), MaxX);
-	Config->SetNumberField(TEXT("MinY"), MinY);
-	Config->SetNumberField(TEXT("MaxY"), MaxY);
-	
-	HeightmapObject->SetObjectField(TEXT("Config"), Config);
-	
-	// Add quick lookup ranges for optimization
-	TSharedPtr<FJsonObject> HeightRanges = MakeShareable(new FJsonObject);
-	int32 MinHeight = INT32_MAX;
-	int32 MaxHeight = INT32_MIN;
-	
-	for (auto& Entry : HeightGrid)
-	{
-		for (int32 Height : Entry.Value)
-		{
-			MinHeight = FMath::Min(MinHeight, Height);
-			MaxHeight = FMath::Max(MaxHeight, Height);
-		}
-	}
-	
-	HeightRanges->SetNumberField(TEXT("GlobalMinHeight"), MinHeight != INT32_MAX ? MinHeight : 0);
-	HeightRanges->SetNumberField(TEXT("GlobalMaxHeight"), MaxHeight != INT32_MIN ? MaxHeight : 0);
-	HeightRanges->SetNumberField(TEXT("HeightRange"), MaxHeight != INT32_MIN && MinHeight != INT32_MAX ? (MaxHeight - MinHeight) : 0);
-	
-	HeightmapObject->SetObjectField(TEXT("HeightRanges"), HeightRanges);
-	
+	UE_LOG(LogTemp, Log, TEXT("Heightmap extraction completed"));
 	return HeightmapObject;
 }
 
@@ -609,35 +796,56 @@ bool FNavMeshExporter::SaveJsonToFile(const TSharedPtr<FJsonObject>& JsonObject,
 {
 	if (!JsonObject.IsValid())
 	{
+		UE_LOG(LogTemp, Error, TEXT("Invalid JSON object for saving"));
 		return false;
 	}
 
 	FString Directory = FPaths::GetPath(FilePath);
 	if (!FPlatformFileManager::Get().GetPlatformFile().DirectoryExists(*Directory))
 	{
-		FPlatformFileManager::Get().GetPlatformFile().CreateDirectoryTree(*Directory);
+		if (!FPlatformFileManager::Get().GetPlatformFile().CreateDirectoryTree(*Directory))
+		{
+			UE_LOG(LogTemp, Error, TEXT("Failed to create directory: %s"), *Directory);
+			return false;
+		}
 	}
 
 	FString OutputString;
-	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputString);
-	FJsonSerializer::Serialize(JsonObject.ToSharedRef(), Writer);
-	return FFileHelper::SaveStringToFile(OutputString, *FilePath);
+	// Use compact JSON writer to minimize file size (no indentation, minimal spaces)
+	TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer = TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&OutputString);
+	
+	if (!FJsonSerializer::Serialize(JsonObject.ToSharedRef(), Writer))
+	{
+		UE_LOG(LogTemp, Error, TEXT("Failed to serialize JSON"));
+		return false;
+	}
+
+	if (!FFileHelper::SaveStringToFile(OutputString, *FilePath))
+	{
+		UE_LOG(LogTemp, Error, TEXT("Failed to save file: %s"), *FilePath);
+		return false;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("Successfully saved JSON to: %s"), *FilePath);
+	return true;
 }
 
 FString FNavMeshExporter::GetCurrentLevelName(UWorld* World)
 {
-	if (!World)
+	if (!World || !IsValid(World))
 	{
 		return TEXT("UnknownLevel");
 	}
 
 	FString LevelName = World->GetMapName();
 	
+	// Remove PIE prefixes
 	LevelName = LevelName.Replace(TEXT("UEDPIE_0_"), TEXT(""));
 	LevelName = LevelName.Replace(TEXT("UEDPIE_1_"), TEXT(""));
 	LevelName = LevelName.Replace(TEXT("UEDPIE_2_"), TEXT(""));
 	LevelName = LevelName.Replace(TEXT("UEDPIE_3_"), TEXT(""));
 	
+	// Extract filename from full path
 	if (LevelName.Contains(TEXT("/")))
 	{
 		FString Path, Filename, Extension;

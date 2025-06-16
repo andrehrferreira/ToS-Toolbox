@@ -20,17 +20,17 @@ public:
 	static void ExportHeightmap();
 
 private:
-	// Check if NavMeshBoundsVolume exists in current level
-	static bool HasNavMeshBoundsVolume(UWorld* World);
+	// Get world bounds for heightmap extraction
+	static FBox GetWorldBounds(UWorld* World);
 	
-	// Get NavMesh data
-	static TSharedPtr<FJsonObject> GetNavMeshData(UWorld* World);
+	// Create NavMesh export data (thread-safe)
+	static TSharedPtr<FJsonObject> CreateNavMeshExportData(UWorld* World);
 	
 	// Extract NavMesh triangulation data
 	static TSharedPtr<FJsonObject> ExtractNavMeshTriangulation(class ARecastNavMesh* RecastNavMesh);
 	
 	// Extract Heightmap for ground/height validation
-	static TSharedPtr<FJsonObject> ExtractHeightmap(UWorld* World, const FBox& Bounds);
+	static TSharedPtr<FJsonObject> ExtractHeightmap(UWorld* World, const FBox& Bounds, TSharedPtr<class SNotificationItem> ProgressNotification = nullptr);
 	
 	// Save JSON file
 	static bool SaveJsonToFile(const TSharedPtr<FJsonObject>& JsonObject, const FString& FilePath);

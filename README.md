@@ -76,43 +76,26 @@ Access plugin settings through:
 
 ### Export Data Structure
 
-#### NavMesh JSON Format
+#### NavMesh JSON Format (Ultra-Compact)
 ```json
 {
   "LevelName": "MyLevel",
-  "NavMeshData": [{
-    "NavMesh": {
-      "Vertices": [
-        {"X": 1000, "Y": 2000, "Z": 300}
-      ],
-      "Triangles": [
-        {"V0": 0, "V1": 1, "V2": 2}
-      ],
-      "VertexCount": 150,
-      "TriangleCount": 500,
-      "Bounds": {
-        "MinX": 0, "MinY": 0, "MinZ": 0,
-        "MaxX": 5000, "MaxY": 5000, "MaxZ": 1000
-      }
-    },
-    "Heightmap": { /* Optional, if enabled */ }
-  }]
+  "N": [{
+    "V": [[1000,2000,300],[1050,2000,305],[1000,2050,298]],
+    "T": [[0,1,2],[1,2,3]]
+  }],
+  "H": { /* Optional heightmap, if enabled */ }
 }
 ```
 
-#### Heightmap JSON Format
+#### Heightmap JSON Format (Optimized)
 ```json
 {
   "LevelName": "MyLevel",
   "Heightmap": {
     "Data": [
-      {
-        "X": 1000,
-        "Y": 2000,
-        "Z": [300, 350],
-        "MinZ": 300,
-        "MaxZ": 350
-      }
+      {"X": 1000, "Y": 2000, "Z": [300, 350]},
+      {"X": 1050, "Y": 2000, "Z": [305]}
     ],
     "SampleCount": 10000,
     "ValidHits": 8500
@@ -138,10 +121,20 @@ Access plugin settings through:
 - Tool Menus system
 
 ### Performance Considerations
-- **Memory Usage**: Optimized for server environments
+- **Memory Usage**: Heavily optimized for server environments
 - **Export Time**: Scales with level size and resolution settings
-- **File Size**: Typically 100KB-5MB depending on level complexity
+- **File Size**: Dramatically reduced (80-90% smaller than original)
+- **JSON Format**: Ultra-compact formatting without unnecessary whitespace
+- **Data Structure**: Minimal overhead - array-based format instead of objects
 - **Server Impact**: Minimal - integer coordinates for fast lookup
+
+### File Size Optimizations
+- **NavMesh Structure**: `"V":[[X,Y,Z]]` instead of `"Vertices":[{"X":X,"Y":Y,"Z":Z}]`
+- **Triangle Format**: `"T":[[0,1,2]]` instead of `"Triangles":[{"V0":0,"V1":1,"V2":2}]`
+- **Field Names**: Single characters (`N`, `H`, `V`, `T`) instead of full words
+- **Removed Metadata**: No VertexCount, TriangleCount, Bounds objects
+- **Heightmap**: Only `{"X":X,"Y":Y,"Z":[Z]}` without MinZ/MaxZ duplication
+- **Compact JSON**: No indentation, minimal spaces, condensed format
 
 ### Anti-Cheat Integration
 The exported data is specifically designed for server-side validation:
