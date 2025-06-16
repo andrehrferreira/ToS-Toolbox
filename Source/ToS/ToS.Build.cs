@@ -48,7 +48,9 @@ public class ToS : ModuleRules
 				"ToolMenus",
 				"NavigationSystem",
 				"Json",
-				"Projects"
+				"Projects",
+				"DeveloperSettings",
+				"Settings"
 				// ... add private dependencies that you statically link with here ...	
 			}
 			);

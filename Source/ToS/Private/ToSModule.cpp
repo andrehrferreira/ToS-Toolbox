@@ -8,6 +8,7 @@
 #include "ToolMenuSection.h"
 #include "Framework/Commands/UIAction.h"
 #include "Styling/AppStyle.h"
+#include "ISettingsModule.h"
 
 #define LOCTEXT_NAMESPACE "ToSModule"
 
@@ -68,15 +69,19 @@ void FToSModule::RegisterMenus()
 				FUIAction(FExecuteAction::CreateStatic(&FNavMeshExporter::ExportHeightmap))
 			);
 			
-			// Future tools section placeholder
-			FToolMenuSection& FutureSection = InMenu->AddSection(TEXT("FutureTools"), LOCTEXT("FutureToolsLabel", "More Tools"));
+			// Settings section
+			FToolMenuSection& SettingsSection = InMenu->AddSection(TEXT("Settings"), LOCTEXT("SettingsLabel", "Settings"));
 			
-			FutureSection.AddMenuEntry(
-				TEXT("PlaceholderTool"),
-				LOCTEXT("PlaceholderLabel", "More Tools Coming Soon"),
-				LOCTEXT("PlaceholderTooltip", "Additional tools will be added here"),
+			SettingsSection.AddMenuEntry(
+				TEXT("ToSSettings"),
+				LOCTEXT("ToSSettingsLabel", "Plugin Settings"),
+				LOCTEXT("ToSSettingsTooltip", "Configure Tales Of Shadowland Toolbox settings"),
 				FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Settings"),
-				FUIAction()
+				FUIAction(FExecuteAction::CreateLambda([]()
+				{
+					// Open project settings and navigate to our plugin settings
+					FModuleManager::LoadModuleChecked<ISettingsModule>("Settings").ShowViewer("Project", "Plugins", "Tales Of Shadowland Toolbox");
+				}))
 			);
 		}),
 		LOCTEXT("ToSToolsLabel", "ToS"),

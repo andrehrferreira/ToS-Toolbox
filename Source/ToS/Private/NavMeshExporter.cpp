@@ -20,6 +20,8 @@
 #include "CollisionQueryParams.h"
 #include "Engine/StaticMeshActor.h"
 #include "Components/StaticMeshComponent.h"
+#include "ToSSettings.h"
+#include "Misc/DateTime.h"
 
 FNavMeshExporter::FNavMeshExporter()
 {
@@ -51,9 +53,9 @@ void FNavMeshExporter::ExportNavMesh()
 		return;
 	}
 
+	// Generate file path using settings
 	FString LevelName = GetCurrentLevelName(CurrentWorld);
-	FString FileName = FString::Printf(TEXT("%s_NavMesh.json"), *LevelName);
-	FString FilePath = FPaths::Combine(FPaths::ProjectPluginsDir(), TEXT("ToS"), FileName);
+	FString FilePath = GenerateExportFilePath(LevelName, TEXT("NavMesh"));
 
 	if (SaveJsonToFile(NavMeshData, FilePath))
 	{
@@ -159,9 +161,8 @@ void FNavMeshExporter::ExportHeightmap()
 	LevelBounds->SetNumberField(TEXT("MaxZ"), WorldBounds.Max.Z);
 	JsonObject->SetObjectField(TEXT("LevelBounds"), LevelBounds);
 
-	// Create filename for heightmap
-	FString FileName = FString::Printf(TEXT("%s_Heightmap.json"), *LevelName);
-	FString FilePath = FPaths::Combine(FPaths::ProjectPluginsDir(), TEXT("ToS"), FileName);
+	// Generate file path using settings
+	FString FilePath = GenerateExportFilePath(LevelName, TEXT("Heightmap"));
 
 	// Save JSON file
 	if (SaveJsonToFile(JsonObject, FilePath))
@@ -261,11 +262,15 @@ TSharedPtr<FJsonObject> FNavMeshExporter::GetNavMeshData(UWorld* World)
 				NavMeshObject->SetObjectField(TEXT("NavMesh"), TriangulationData);
 			}
 			
-			// Add heightmap data
-			TSharedPtr<FJsonObject> HeightmapData = ExtractHeightmap(World, NavData->GetBounds());
-			if (HeightmapData.IsValid())
+			// Optionally add heightmap data based on settings
+			const UToSSettings* ExportSettings = UToSSettings::Get();
+			if (ExportSettings->bIncludeHeightmapWithNavMesh)
 			{
-				NavMeshObject->SetObjectField(TEXT("Heightmap"), HeightmapData);
+				TSharedPtr<FJsonObject> HeightmapData = ExtractHeightmap(World, NavData->GetBounds());
+				if (HeightmapData.IsValid())
+				{
+					NavMeshObject->SetObjectField(TEXT("Heightmap"), HeightmapData);
+				}
 			}
 		}
 
@@ -291,6 +296,9 @@ TSharedPtr<FJsonObject> FNavMeshExporter::ExtractNavMeshTriangulation(ARecastNav
 	
 	int32 TotalVertices = 0;
 	int32 TotalTriangles = 0;
+	
+	// Get settings for triangle limits
+	const UToSSettings* TriangleSettings = UToSSettings::Get();
 	
 	// Extract triangulation using surface sampling instead of direct generator access
 	if (true) // Always proceed with surface sampling
@@ -386,17 +394,17 @@ TSharedPtr<FJsonObject> FNavMeshExporter::ExtractNavMeshTriangulation(ARecastNav
 							TrianglesArray.Add(MakeShareable(new FJsonValueObject(TriangleObject)));
 							TotalTriangles++;
 							
-							// Limit number of triangles to avoid massive JSON files
-							if (TotalTriangles >= 500)
+							// Limit number of triangles based on settings
+							if (TotalTriangles >= TriangleSettings->MaxTriangles)
 							{
 								break;
 							}
 						}
 					}
 				}
-				if (TotalTriangles >= 500) break;
+				if (TotalTriangles >= TriangleSettings->MaxTriangles) break;
 			}
-			if (TotalTriangles >= 500) break;
+			if (TotalTriangles >= TriangleSettings->MaxTriangles) break;
 		}
 		
 		TotalVertices = NavVertices.Num();
@@ -465,8 +473,9 @@ TSharedPtr<FJsonObject> FNavMeshExporter::ExtractHeightmap(UWorld* World, const 
 	MinY -= BufferSize;
 	MaxY += BufferSize;
 	
-	// Raycast resolution (every N units)
-	int32 Resolution = 50; // 0.5 meters
+	// Get resolution from settings
+	const UToSSettings* Settings = UToSSettings::Get();
+	int32 Resolution = Settings->HeightmapResolution;
 	int32 TotalSamples = 0;
 	int32 ValidHits = 0;
 	
@@ -637,4 +646,30 @@ FString FNavMeshExporter::GetCurrentLevelName(UWorld* World)
 	}
 
 	return LevelName.IsEmpty() ? TEXT("UnknownLevel") : LevelName;
-} 
+}
+
+FString FNavMeshExporter::GenerateExportFilePath(const FString& LevelName, const FString& FileType)
+{
+	const UToSSettings* Settings = UToSSettings::Get();
+	FString ExportDir = Settings->ExportDirectory;
+	
+	// Ensure export directory exists
+	if (!FPlatformFileManager::Get().GetPlatformFile().DirectoryExists(*ExportDir))
+	{
+		FPlatformFileManager::Get().GetPlatformFile().CreateDirectoryTree(*ExportDir);
+	}
+	
+	// Generate filename
+	FString FileName;
+	if (Settings->bIncludeTimestamp)
+	{
+		FString Timestamp = FDateTime::Now().ToString(TEXT("_%Y%m%d_%H%M%S"));
+		FileName = FString::Printf(TEXT("%s_%s%s.json"), *LevelName, *FileType, *Timestamp);
+	}
+	else
+	{
+		FileName = FString::Printf(TEXT("%s_%s.json"), *LevelName, *FileType);
+	}
+	
+	return FPaths::Combine(ExportDir, FileName);
+}

@@ -37,4 +37,7 @@ private:
 	
 	// Get current level name
 	static FString GetCurrentLevelName(UWorld* World);
+	
+	// Generate export file path using settings
+	static FString GenerateExportFilePath(const FString& LevelName, const FString& FileType);
 }; 
