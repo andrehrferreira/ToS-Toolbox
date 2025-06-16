@@ -1,0 +1,20 @@
+{
+	"RemapUnityFiles": 
+	{
+		"Module.ToS.cpp.obj": [
+			"ToS.init.gen.cpp.obj",
+			"ToSEditorMode.gen.cpp.obj",
+			"ToSInteractiveTool.gen.cpp.obj",
+			"ToSSimpleTool.gen.cpp.obj",
+			"PerModuleInline.gen.cpp.obj",
+			"NavMeshExporter.cpp.obj",
+			"ToSInteractiveTool.cpp.obj",
+			"ToSSimpleTool.cpp.obj",
+			"ToSEditorMode.cpp.obj",
+			"ToSEditorModeCommands.cpp.obj",
+			"ToSEditorModeToolkit.cpp.obj",
+			"ToSModule.cpp.obj",
+			"ToSStyle.cpp.obj"
+		]
+	}
+}
