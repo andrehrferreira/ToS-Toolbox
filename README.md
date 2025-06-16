@@ -5,32 +5,48 @@ A powerful Unreal Engine 5.5+ plugin designed for exporting NavMesh and heightma
 ## Features
 
 ### 🗺️ NavMesh Export
-- **High-resolution surface sampling** with intelligent triangulation
+- **High-resolution surface sampling** with intelligent O(N²) triangulation
+- **Multi-threaded processing** with progress indicators
 - **Optimized data structure** for server validation
 - **Configurable triangle limits** (100-2000 triangles)
 - **Integer coordinate precision** for consistent server lookup
+- **Grid-based triangulation** for optimal performance
 - **Minimal memory footprint** for efficient server processing
 
 ### 🏔️ Heightmap Export
 - **Multi-line trace raycast system** for accurate height detection
+- **Parallel processing** with real-time progress updates
 - **Configurable sampling resolution** (10-200 Unreal units)
 - **Surface type detection** and walkability analysis
-- **Consolidated height data** with MinZ/MaxZ values per coordinate
+- **Consolidated height data** per coordinate
 - **Absolute coordinate system** for easy server integration
+- **Thread-safe operations** with progress tracking
 
 ### ⚙️ Configuration System
 - **Persistent project settings** saved in project configuration
 - **Customizable export directory** with automatic creation
 - **Optional timestamp** in filenames
 - **Quality vs performance** trade-offs
+- **Grid size configuration** for triangulation
 - **Easy access** through integrated UI
 
 ### 🎨 User Interface
 - **Custom toolbar integration** in Unreal Editor
 - **Dropdown menu** with organized tools
 - **Custom plugin icon** (Icon128.png)
+- **Professional loading system** with animated throbbers
+- **Real-time progress indicators** similar to Unreal's build system
+- **Thread-safe UI updates** with detailed status messages
 - **Direct access** to plugin settings
 - **Intuitive workflow** for level designers
+
+### 🚀 Performance & Threading
+- **Full multi-threading support** to prevent editor freezing
+- **Parallel raycast operations** for heightmap sampling
+- **Optimized grid-based triangulation** (O(N²) instead of O(N³))
+- **Progressive status updates** with percentage completion
+- **Thread-safe containers** with proper synchronization
+- **Background processing** with foreground UI updates
 
 ## Installation
 
@@ -88,7 +104,7 @@ Access plugin settings through:
 }
 ```
 
-#### Heightmap JSON Format (Optimized)
+#### Heightmap JSON Format (Ultra-Optimized)
 ```json
 {
   "LevelName": "MyLevel",
@@ -107,6 +123,23 @@ Access plugin settings through:
 }
 ```
 
+### Progress & Loading System
+
+The plugin features a professional loading system with detailed progress tracking:
+
+#### NavMesh Export Stages:
+1. **"Exporting NavMesh..."** - Initial setup and data preparation
+2. **"Saving NavMesh file..."** - Writing JSON data to file
+3. **Success/Failure notification** - Final result with file path
+
+#### Heightmap Export Stages:
+1. **"Exporting Heightmap..."** - Initial setup
+2. **"Calculated world bounds..."** - World boundary calculation
+3. **"Sampling heightmap data... X.X%"** - Real-time progress updates
+4. **"Building JSON structure..."** - Data consolidation
+5. **"Saving heightmap file..."** - File writing
+6. **Success/Failure notification** - Final result with file path
+
 ## Technical Details
 
 ### Requirements
@@ -122,11 +155,15 @@ Access plugin settings through:
 
 ### Performance Considerations
 - **Memory Usage**: Heavily optimized for server environments
-- **Export Time**: Scales with level size and resolution settings
+- **Export Time**: Significantly reduced with multi-threading and O(N²) algorithms
 - **File Size**: Dramatically reduced (80-90% smaller than original)
+- **Threading**: Full async processing prevents editor freezing
+- **Progress Tracking**: Real-time updates without performance impact
 - **JSON Format**: Ultra-compact formatting without unnecessary whitespace
 - **Data Structure**: Minimal overhead - array-based format instead of objects
 - **Server Impact**: Minimal - integer coordinates for fast lookup
+- **Parallel Processing**: ParallelFor operations for raycast sampling
+- **Thread Safety**: Proper synchronization with FCriticalSection and std::atomic
 
 ### File Size Optimizations
 - **NavMesh Structure**: `"V":[[X,Y,Z]]` instead of `"Vertices":[{"X":X,"Y":Y,"Z":Z}]`
@@ -206,15 +243,46 @@ ToS/
 - Ensure you're in a valid Unreal project
 - Restart editor after changing settings
 
+**Threading/Crash Issues**
+- Ensure you're using the latest version with threading fixes
+- Check that TActorIterator operations run on game thread
+- Verify proper lambda capture semantics (avoid reference captures)
+- Use thread-safe containers for parallel operations
+
+**Performance Issues**
+- Reduce heightmap resolution for faster exports
+- Lower triangle limits for NavMesh exports
+- Ensure adequate system memory for large levels
+- Check progress notifications for bottlenecks
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Changelog
+
+### Latest Version (Current)
+- ✅ **Multi-threading support** - Full async processing to prevent editor freezing
+- ✅ **Professional progress system** - Real-time loading indicators with detailed stages
+- ✅ **Threading safety fixes** - Proper game thread operations for TActorIterator
+- ✅ **O(N²) triangulation** - Optimized grid-based algorithm instead of O(N³)
+- ✅ **Parallel heightmap sampling** - ParallelFor operations with progress tracking
+- ✅ **Thread-safe containers** - std::atomic and FCriticalSection synchronization
+- ✅ **Improved error handling** - Exception handling and validation
+- ✅ **NavMesh bounds integration** - Uses NavigationData bounds when available
+
+### Previous Versions
+- ✅ **Ultra-compact JSON format** - 80-90% file size reduction
+- ✅ **Configuration system** - Project settings integration
+- ✅ **Custom UI styling** - Plugin icon and dropdown menu
+- ✅ **Integer coordinate system** - Server-optimized data format
+- ✅ **Heightmap consolidation** - Multiple heights per coordinate
 
 ## Acknowledgments
 
 - **Unreal Engine Team** for the excellent navigation and editor frameworks
 - **Epic Games** for comprehensive documentation and examples
-- **Tales Of Shadowland Team** for project requirements and testing
+- **Uzmi Games** (formerly Tales Of Shadowland Team) for project requirements and testing
 
 ## Support
 
