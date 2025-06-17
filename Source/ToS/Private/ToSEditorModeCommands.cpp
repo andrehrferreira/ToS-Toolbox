@@ -2,32 +2,34 @@
 
 #include "ToSEditorModeCommands.h"
 #include "ToSEditorMode.h"
-#include "Styling/AppStyle.h"
+#include "ToSStyle.h"
 
-#define LOCTEXT_NAMESPACE "ToSEditorModeCommands"
+#define LOCTEXT_NAMESPACE "FToSEditorModeCommands"
 
 FToSEditorModeCommands::FToSEditorModeCommands()
 	: TCommands<FToSEditorModeCommands>("ToSEditorMode",
 		NSLOCTEXT("ToSEditorMode", "ToSEditorModeCommands", "ToS Editor Mode"),
 		NAME_None,
-		FAppStyle::GetAppStyleSetName())
+		FToSStyle::GetStyleSetName())
 {
 }
 
 void FToSEditorModeCommands::RegisterCommands()
 {
-	TArray <TSharedPtr<FUICommandInfo>>& ToolCommands = Commands.FindOrAdd(NAME_Default);
-
-	UI_COMMAND(SimpleTool, "Show Actor Info", "Opens message box with info about a clicked actor", EUserInterfaceActionType::Button, FInputChord());
-	ToolCommands.Add(SimpleTool);
-
-	UI_COMMAND(InteractiveTool, "Measure Distance", "Measures distance between 2 points (click to set origin, shift-click to set end point)", EUserInterfaceActionType::ToggleButton, FInputChord());
-	ToolCommands.Add(InteractiveTool);
+	UI_COMMAND(ExportNavMesh, "Export NavMesh", "Export current level NavMesh to JSON", EUserInterfaceActionType::Button, FInputChord());
+	UI_COMMAND(ExportHeightmap, "Export Heightmap", "Export level heightmap for anti-cheat validation", EUserInterfaceActionType::Button, FInputChord());
 }
 
 TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> FToSEditorModeCommands::GetCommands()
 {
-	return FToSEditorModeCommands::Get().Commands;
+	TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> Commands;
+	TArray<TSharedPtr<FUICommandInfo>> ToolCommands;
+	
+	const FToSEditorModeCommands& CommandsInstance = FToSEditorModeCommands::Get();
+	ToolCommands.Add(CommandsInstance.ExportNavMesh);
+	ToolCommands.Add(CommandsInstance.ExportHeightmap);
+	Commands.Add(NAME_Default, ToolCommands);
+	return Commands;
 }
 
 #undef LOCTEXT_NAMESPACE

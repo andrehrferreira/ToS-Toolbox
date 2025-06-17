@@ -40,4 +40,10 @@ private:
 	
 	// Generate export file path using settings
 	static FString GenerateExportFilePath(const FString& LevelName, const FString& FileType);
+	
+	// Execute Python script to generate heightmap image
+	static bool ExecutePythonHeightmapScript(const FString& JsonFilePath);
+	
+	// Execute Python script to generate NavMesh visualization
+	static bool ExecutePythonNavMeshScript(const FString& JsonFilePath);
 }; 

@@ -25,6 +25,8 @@
 #include "Async/Async.h"
 #include "Misc/ScopedSlowTask.h"
 #include "Async/ParallelFor.h"
+#include "Interfaces/IPluginManager.h"
+#include "HAL/PlatformProcess.h"
 #include <atomic>
 
 FNavMeshExporter::FNavMeshExporter()
@@ -113,21 +115,56 @@ void FNavMeshExporter::ExportNavMesh()
 		
 		bool bSaveSuccess = SaveJsonToFile(JsonObject, FilePath);
 		
-		// Show final result on game thread
-		AsyncTask(ENamedThreads::GameThread, [bSaveSuccess, FilePath, ProgressNotification]()
+		// Generate NavMesh visualization using Python script
+		if (bSaveSuccess)
 		{
-			if (ProgressNotification.IsValid())
+			AsyncTask(ENamedThreads::GameThread, [ProgressNotification]()
 			{
-				FString Message = bSaveSuccess ? 
-					FString::Printf(TEXT("NavMesh exported successfully to: %s"), *FilePath) :
-					TEXT("Failed to save NavMesh export file");
-				
-				ProgressNotification->SetText(FText::FromString(Message));
-				auto CompletionState = bSaveSuccess ? SNotificationItem::CS_Success : SNotificationItem::CS_Fail;
-				ProgressNotification->SetCompletionState(CompletionState);
-				ProgressNotification->ExpireAndFadeout();
-			}
-		});
+				if (ProgressNotification.IsValid())
+				{
+					ProgressNotification->SetText(FText::FromString("Generating NavMesh visualization..."));
+				}
+			});
+			
+			// Execute Python script to generate the visualization
+			bool bVisualizationSuccess = ExecutePythonNavMeshScript(FilePath);
+			
+			// Show final result on game thread
+			AsyncTask(ENamedThreads::GameThread, [bVisualizationSuccess, FilePath, ProgressNotification]()
+			{
+				if (ProgressNotification.IsValid())
+				{
+					FString Message;
+					if (bVisualizationSuccess)
+					{
+						FString ImagePath = FilePath.Replace(TEXT(".json"), TEXT("_NavMesh.png"));
+						Message = FString::Printf(TEXT("NavMesh exported successfully!\nJSON: %s\nVisualization: %s"), *FilePath, *ImagePath);
+					}
+					else
+					{
+						Message = FString::Printf(TEXT("JSON exported but visualization generation failed.\nJSON: %s"), *FilePath);
+					}
+					
+					ProgressNotification->SetText(FText::FromString(Message));
+					auto CompletionState = bVisualizationSuccess ? SNotificationItem::CS_Success : SNotificationItem::CS_Fail;
+					ProgressNotification->SetCompletionState(CompletionState);
+					ProgressNotification->ExpireAndFadeout();
+				}
+			});
+		}
+		else
+		{
+			// Show error on game thread
+			AsyncTask(ENamedThreads::GameThread, [FilePath, ProgressNotification]()
+			{
+				if (ProgressNotification.IsValid())
+				{
+					ProgressNotification->SetText(FText::FromString("Failed to save NavMesh export file"));
+					ProgressNotification->SetCompletionState(SNotificationItem::CS_Fail);
+					ProgressNotification->ExpireAndFadeout();
+				}
+			});
+		}
 		});
 	});
 }
@@ -265,21 +302,56 @@ void FNavMeshExporter::ExportHeightmap()
 		FString FilePath = GenerateExportFilePath(LevelName, TEXT("Heightmap"));
 		bool bSaveSuccess = SaveJsonToFile(JsonObject, FilePath);
 		
-		// Show final result on game thread
-		AsyncTask(ENamedThreads::GameThread, [bSaveSuccess, FilePath, ProgressNotification]()
+		// Generate heightmap image using Python script
+		if (bSaveSuccess)
 		{
-			if (ProgressNotification.IsValid())
+			AsyncTask(ENamedThreads::GameThread, [ProgressNotification]()
 			{
-				FString Message = bSaveSuccess ? 
-					FString::Printf(TEXT("Heightmap exported successfully to: %s"), *FilePath) :
-					TEXT("Failed to save Heightmap export file");
-				
-				ProgressNotification->SetText(FText::FromString(Message));
-				auto CompletionState = bSaveSuccess ? SNotificationItem::CS_Success : SNotificationItem::CS_Fail;
-				ProgressNotification->SetCompletionState(CompletionState);
-				ProgressNotification->ExpireAndFadeout();
-			}
-		});
+				if (ProgressNotification.IsValid())
+				{
+					ProgressNotification->SetText(FText::FromString("Generating heightmap image..."));
+				}
+			});
+			
+			// Execute Python script to generate the image
+			bool bImageSuccess = ExecutePythonHeightmapScript(FilePath);
+			
+			// Show final result on game thread
+			AsyncTask(ENamedThreads::GameThread, [bImageSuccess, FilePath, ProgressNotification]()
+			{
+				if (ProgressNotification.IsValid())
+				{
+					FString Message;
+					if (bImageSuccess)
+					{
+						FString ImagePath = FilePath.Replace(TEXT(".json"), TEXT("_Python.png"));
+						Message = FString::Printf(TEXT("Heightmap exported successfully!\nJSON: %s\nImage: %s"), *FilePath, *ImagePath);
+					}
+					else
+					{
+						Message = FString::Printf(TEXT("JSON exported but image generation failed.\nJSON: %s"), *FilePath);
+					}
+					
+					ProgressNotification->SetText(FText::FromString(Message));
+					auto CompletionState = bImageSuccess ? SNotificationItem::CS_Success : SNotificationItem::CS_Fail;
+					ProgressNotification->SetCompletionState(CompletionState);
+					ProgressNotification->ExpireAndFadeout();
+				}
+			});
+		}
+		else
+		{
+			// Show error on game thread
+			AsyncTask(ENamedThreads::GameThread, [FilePath, ProgressNotification]()
+			{
+				if (ProgressNotification.IsValid())
+				{
+					ProgressNotification->SetText(FText::FromString("Failed to save Heightmap export file"));
+					ProgressNotification->SetCompletionState(SNotificationItem::CS_Fail);
+					ProgressNotification->ExpireAndFadeout();
+				}
+			});
+		}
 		});
 	});
 }
@@ -880,4 +952,135 @@ FString FNavMeshExporter::GenerateExportFilePath(const FString& LevelName, const
 	}
 	
 	return FPaths::Combine(ExportDir, FileName);
+}
+
+bool FNavMeshExporter::ExecutePythonHeightmapScript(const FString& JsonFilePath)
+{
+	// Get plugin directory
+	FString PluginDir;
+	TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin("ToS");
+	if (Plugin.IsValid())
+	{
+		PluginDir = Plugin->GetBaseDir();
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("ToS Plugin not found"));
+		return false;
+	}
+	
+	// Path to Python script
+	FString PythonScriptPath = FPaths::Combine(PluginDir, TEXT("Content"), TEXT("Python"), TEXT("heightmap_generator.py"));
+	
+	// Check if Python script exists
+	if (!FPaths::FileExists(PythonScriptPath))
+	{
+		UE_LOG(LogTemp, Error, TEXT("Python script not found: %s"), *PythonScriptPath);
+		return false;
+	}
+	
+	// Create command to execute Python script
+	FString PythonCommand = FString::Printf(TEXT("python \"%s\" \"%s\""), *PythonScriptPath, *JsonFilePath);
+	
+	UE_LOG(LogTemp, Log, TEXT("Executing Python command: %s"), *PythonCommand);
+	
+	// Execute the command
+	int32 ReturnCode = -1;
+	FString StdOut;
+	FString StdErr;
+	
+	bool bSuccess = FPlatformProcess::ExecProcess(
+		TEXT("python"),
+		*FString::Printf(TEXT("\"%s\" \"%s\""), *PythonScriptPath, *JsonFilePath),
+		&ReturnCode,
+		&StdOut,
+		&StdErr
+	);
+	
+	if (bSuccess && ReturnCode == 0)
+	{
+		UE_LOG(LogTemp, Log, TEXT("Python script executed successfully"));
+		if (!StdOut.IsEmpty())
+		{
+			UE_LOG(LogTemp, Log, TEXT("Python Output: %s"), *StdOut);
+		}
+		return true;
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("Python script execution failed. Return code: %d"), ReturnCode);
+		if (!StdErr.IsEmpty())
+		{
+			UE_LOG(LogTemp, Error, TEXT("Python Error: %s"), *StdErr);
+		}
+		if (!StdOut.IsEmpty())
+		{
+			UE_LOG(LogTemp, Log, TEXT("Python Output: %s"), *StdOut);
+		}
+		return false;
+	}
+}
+
+bool FNavMeshExporter::ExecutePythonNavMeshScript(const FString& JsonFilePath)
+{
+	// Get plugin directory
+	FString PluginDir;
+	TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin("ToS");
+	if (Plugin.IsValid())
+	{
+		PluginDir = Plugin->GetBaseDir();
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("ToS Plugin not found"));
+		return false;
+	}
+	
+	// Path to NavMesh visualization Python script
+	FString PythonScriptPath = FPaths::Combine(PluginDir, TEXT("Content"), TEXT("Python"), TEXT("navmesh_visualizer.py"));
+	
+	// Check if Python script exists
+	if (!FPaths::FileExists(PythonScriptPath))
+	{
+		UE_LOG(LogTemp, Error, TEXT("NavMesh visualization script not found: %s"), *PythonScriptPath);
+		return false;
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("Executing NavMesh visualization Python script: %s"), *PythonScriptPath);
+	
+	// Execute the command
+	int32 ReturnCode = -1;
+	FString StdOut;
+	FString StdErr;
+	
+	bool bSuccess = FPlatformProcess::ExecProcess(
+		TEXT("python"),
+		*FString::Printf(TEXT("\"%s\" \"%s\""), *PythonScriptPath, *JsonFilePath),
+		&ReturnCode,
+		&StdOut,
+		&StdErr
+	);
+	
+	if (bSuccess && ReturnCode == 0)
+	{
+		UE_LOG(LogTemp, Log, TEXT("NavMesh visualization script executed successfully"));
+		if (!StdOut.IsEmpty())
+		{
+			UE_LOG(LogTemp, Log, TEXT("Python Output: %s"), *StdOut);
+		}
+		return true;
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("NavMesh visualization script execution failed. Return code: %d"), ReturnCode);
+		if (!StdErr.IsEmpty())
+		{
+			UE_LOG(LogTemp, Error, TEXT("Python Error: %s"), *StdErr);
+		}
+		if (!StdOut.IsEmpty())
+		{
+			UE_LOG(LogTemp, Log, TEXT("Python Output: %s"), *StdOut);
+		}
+		return false;
+	}
 }

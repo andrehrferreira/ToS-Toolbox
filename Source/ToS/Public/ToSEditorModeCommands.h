@@ -2,7 +2,9 @@
 
 #pragma once
 
+#include "CoreMinimal.h"
 #include "Framework/Commands/Commands.h"
+#include "ToSStyle.h"
 
 /**
  * This class contains info about the full set of commands used in this editor mode.
@@ -15,8 +17,8 @@ public:
 	virtual void RegisterCommands() override;
 	static TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> GetCommands();
 
-	TSharedPtr<FUICommandInfo> SimpleTool;
-	TSharedPtr<FUICommandInfo> InteractiveTool;
+	TSharedPtr<FUICommandInfo> ExportNavMesh;
+	TSharedPtr<FUICommandInfo> ExportHeightmap;
 
 protected:
 	TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> Commands;
