@@ -27,6 +27,7 @@
 #include "Async/ParallelFor.h"
 #include "Interfaces/IPluginManager.h"
 #include "HAL/PlatformProcess.h"
+#include "EditorViewportClient.h"
 #include <atomic>
 
 FNavMeshExporter::FNavMeshExporter()
@@ -354,6 +355,96 @@ void FNavMeshExporter::ExportHeightmap()
 		}
 		});
 	});
+}
+
+void FNavMeshExporter::ResetCameraToNavMeshOrigin()
+{
+	UWorld* CurrentWorld = nullptr;
+	
+	// Get current world on game thread
+	if (GEditor && GEditor->GetEditorWorldContext().World())
+	{
+		CurrentWorld = GEditor->GetEditorWorldContext().World();
+	}
+
+	if (!CurrentWorld)
+	{
+		// Show error notification
+		FNotificationInfo Info(FText::FromString("No valid world found for camera reset"));
+		Info.bUseThrobber = false;
+		Info.bUseSuccessFailIcons = true;
+		Info.bUseLargeFont = true;
+		Info.bFireAndForget = true;
+		Info.FadeOutDuration = 4.0f;
+		Info.ExpireDuration = 4.0f;
+		FSlateNotificationManager::Get().AddNotification(Info)->SetCompletionState(SNotificationItem::CS_Fail);
+		return;
+	}
+
+	// Get NavMesh bounds
+	FBox NavMeshBounds = GetWorldBounds(CurrentWorld);
+	if (!NavMeshBounds.IsValid)
+	{
+		// Show error notification
+		FNotificationInfo Info(FText::FromString("No NavMesh found to position camera"));
+		Info.bUseThrobber = false;
+		Info.bUseSuccessFailIcons = true;
+		Info.bUseLargeFont = true;
+		Info.bFireAndForget = true;
+		Info.FadeOutDuration = 4.0f;
+		Info.ExpireDuration = 4.0f;
+		FSlateNotificationManager::Get().AddNotification(Info)->SetCompletionState(SNotificationItem::CS_Fail);
+		return;
+	}
+
+	// Calculate optimal camera position for top-down NavMesh view
+	FVector NavMeshCenter = NavMeshBounds.GetCenter();
+	FVector NavMeshSize = NavMeshBounds.GetSize();
+	
+	// Position camera above the center of NavMesh bounds
+	float OptimalHeight = FMath::Max(NavMeshSize.X, NavMeshSize.Y) * 1.2f; // 20% margin
+	OptimalHeight = FMath::Max(OptimalHeight, 2000.0f); // Minimum height
+	
+	FVector CameraLocation = FVector(NavMeshCenter.X, NavMeshCenter.Y, NavMeshCenter.Z + OptimalHeight);
+	
+	// Look down at the NavMesh center
+	FRotator CameraRotation = FRotator(-90.0f, 0.0f, 0.0f); // Pitch down 90 degrees
+	
+	// Get editor viewport client
+	if (GEditor && GEditor->GetActiveViewport())
+	{
+		FEditorViewportClient* ViewportClient = (FEditorViewportClient*)GEditor->GetActiveViewport()->GetClient();
+		if (ViewportClient)
+		{
+			// Set camera position and rotation
+			ViewportClient->SetViewLocation(CameraLocation);
+			ViewportClient->SetViewRotation(CameraRotation);
+			ViewportClient->Invalidate();
+			
+			UE_LOG(LogTemp, Log, TEXT("Camera positioned at: %s, looking at NavMesh center: %s"), 
+				*CameraLocation.ToString(), *NavMeshCenter.ToString());
+			
+			// Show success notification
+			FNotificationInfo Info(FText::FromString(FString::Printf(
+				TEXT("Camera positioned for NavMesh overview\nCenter: %.0f, %.0f, %.0f\nHeight: %.0f"), 
+				NavMeshCenter.X, NavMeshCenter.Y, NavMeshCenter.Z, OptimalHeight)));
+			Info.bUseThrobber = false;
+			Info.bUseSuccessFailIcons = true;
+			Info.bUseLargeFont = true;
+			Info.bFireAndForget = true;
+			Info.FadeOutDuration = 3.0f;
+			Info.ExpireDuration = 3.0f;
+			FSlateNotificationManager::Get().AddNotification(Info)->SetCompletionState(SNotificationItem::CS_Success);
+		}
+		else
+		{
+			UE_LOG(LogTemp, Error, TEXT("Failed to get viewport client"));
+		}
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("Failed to get active viewport"));
+	}
 }
 
 FBox FNavMeshExporter::GetWorldBounds(UWorld* World)

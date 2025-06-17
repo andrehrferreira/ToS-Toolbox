@@ -18,6 +18,9 @@ public:
 	
 	// Export only Heightmap for anti-cheat validation
 	static void ExportHeightmap();
+	
+	// Reset camera to optimal NavMesh overview position
+	static void ResetCameraToNavMeshOrigin();
 
 private:
 	// Get world bounds for heightmap extraction

@@ -69,6 +69,17 @@ void FToSModule::RegisterMenus()
 				FUIAction(FExecuteAction::CreateStatic(&FNavMeshExporter::ExportHeightmap))
 			);
 			
+			// Camera section
+			FToolMenuSection& CameraSection = InMenu->AddSection(TEXT("Camera"), LOCTEXT("CameraLabel", "Camera"));
+			
+			CameraSection.AddMenuEntry(
+				TEXT("ResetCameraToOrigin"),
+				LOCTEXT("ResetCameraToOriginLabel", "Reset Camera to Origin"),
+				LOCTEXT("ResetCameraToOriginTooltip", "Position camera for optimal NavMesh overview"),
+				FSlateIcon(FAppStyle::GetAppStyleSetName(), "LevelEditor.Tabs.Viewports"),
+				FUIAction(FExecuteAction::CreateStatic(&FNavMeshExporter::ResetCameraToNavMeshOrigin))
+			);
+			
 			// Settings section
 			FToolMenuSection& SettingsSection = InMenu->AddSection(TEXT("Settings"), LOCTEXT("SettingsLabel", "Settings"));
 			

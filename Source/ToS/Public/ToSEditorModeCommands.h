@@ -19,6 +19,7 @@ public:
 
 	TSharedPtr<FUICommandInfo> ExportNavMesh;
 	TSharedPtr<FUICommandInfo> ExportHeightmap;
+	TSharedPtr<FUICommandInfo> ResetCameraToOrigin;
 
 protected:
 	TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> Commands;
